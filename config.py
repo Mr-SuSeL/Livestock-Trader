@@ -1,13 +1,13 @@
 """
 Application configuration for the futures/options analytics platform.
 
-Instrument definitions belong here, not inside data collectors.
+Instrument definitions belong here, not inside data collectors
+or analysis modules.
 
 Collectors should be generic:
     source -> raw/normalized market data
 
-Instrument configuration defines:
-    what market we want to analyse
+Analysis modules should use instrument metadata from this file.
 """
 
 from __future__ import annotations
@@ -21,8 +21,12 @@ class InstrumentConfig:
     """
     Configuration describing one futures market.
 
-    Symbols are stored per data provider because different providers
-    may use different identifiers for the same underlying market.
+    Provider symbols and external identifiers are stored here because
+    different data sources use different identifiers for the same
+    underlying market.
+
+    Contract months are exchange/instrument metadata and therefore
+    also belong in configuration rather than analysis code.
     """
 
     name: str
@@ -37,7 +41,13 @@ class InstrumentConfig:
 
     price_unit: str
 
+    contract_months: tuple[int, ...]
+
     source_symbols: Mapping[str, str] = field(
+        default_factory=dict
+    )
+
+    source_ids: Mapping[str, str] = field(
         default_factory=dict
     )
 
@@ -46,15 +56,28 @@ class InstrumentConfig:
         source: str,
     ) -> str | None:
         """
-        Return symbol/root used by a specific provider.
+        Return the trading symbol used by a data provider.
         """
 
         return self.source_symbols.get(
             source.strip().upper()
         )
 
+    def id_for(
+        self,
+        source: str,
+    ) -> str | None:
+        """
+        Return a stable external identifier used by a provider.
+        """
+
+        return self.source_ids.get(
+            source.strip().upper()
+        )
+
 
 INSTRUMENTS: dict[str, InstrumentConfig] = {
+
     "lean_hogs": InstrumentConfig(
         name="Lean Hogs",
         exchange="CME",
@@ -63,12 +86,51 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         contract_size=40_000.0,
         point_value=400.0,
         price_unit="US cents per pound",
+        contract_months=(
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            12,
+        ),
         source_symbols={
             "CME": "HE",
             "STOOQ": "HE.F",
             "YAHOO": "HE=F",
         },
+        source_ids={
+            "CFTC": "054642",
+        },
     ),
+
+    "live_cattle": InstrumentConfig(
+        name="Live Cattle",
+        exchange="CME",
+        currency="USD",
+        futures_root="LE",
+        contract_size=40_000.0,
+        point_value=400.0,
+        price_unit="US cents per pound",
+        contract_months=(
+            2,
+            4,
+            6,
+            8,
+            10,
+            12,
+        ),
+        source_symbols={
+            "CME": "LE",
+            "YAHOO": "LE=F",
+        },
+        source_ids={
+            "CFTC": "057642",
+        },
+    ),
+
 }
 
 

@@ -1,5 +1,37 @@
 """
 Command-line entry point for the futures/options analytics platform.
+
+Examples
+--------
+List instruments:
+
+    python main.py list
+
+Show configuration:
+
+    python main.py show lean_hogs
+
+Probe Yahoo:
+
+    python main.py probe lean_hogs yahoo
+
+Probe Stooq:
+
+    python main.py probe lean_hogs stooq
+
+Probe CFTC positioning:
+
+    python main.py probe lean_hogs cftc
+
+The CLI separates:
+
+    instrument configuration
+            |
+            v
+        data source
+            |
+            v
+         collector
 """
 
 from __future__ import annotations
@@ -18,6 +50,7 @@ from config import (
 SUPPORTED_PROBE_SOURCES = (
     "STOOQ",
     "YAHOO",
+    "CFTC",
 )
 
 
@@ -80,6 +113,10 @@ def print_instrument_list() -> None:
     print("CONFIGURED INSTRUMENTS")
     print("=" * 70)
 
+    if not INSTRUMENTS:
+        print("No instruments configured.")
+        return
+
     for key, instrument in sorted(
         INSTRUMENTS.items()
     ):
@@ -115,12 +152,32 @@ def print_instrument(
     print()
     print("Provider symbols:")
 
-    for source, symbol in sorted(
-        instrument.source_symbols.items()
-    ):
-        print(
-            f"  {source:<12} {symbol}"
-        )
+    if instrument.source_symbols:
+
+        for source, symbol in sorted(
+            instrument.source_symbols.items()
+        ):
+            print(
+                f"  {source:<12} {symbol}"
+            )
+
+    else:
+        print("  none")
+
+    print()
+    print("Provider IDs:")
+
+    if instrument.source_ids:
+
+        for source, source_id in sorted(
+            instrument.source_ids.items()
+        ):
+            print(
+                f"  {source:<12} {source_id}"
+            )
+
+    else:
+        print("  none")
 
 
 def probe_stooq(
@@ -173,12 +230,134 @@ def probe_yahoo(
     return 0 if success else 1
 
 
+def probe_cftc(
+    instrument: InstrumentConfig,
+) -> int:
+    """
+    Retrieve recent CFTC positioning observations.
+    """
+
+    from collectors.cftc import (
+        CFTCError,
+        add_positioning_metrics,
+        collect_by_market_code,
+    )
+
+    market_code = instrument.id_for(
+        "CFTC"
+    )
+
+    if market_code is None:
+        print(
+            f"No CFTC market identifier configured "
+            f"for {instrument.name}."
+        )
+        return 2
+
+    print("=" * 70)
+    print("CFTC POSITIONING PROBE")
+    print("=" * 70)
+
+    print(f"Instrument:  {instrument.name}")
+    print(f"Market code: {market_code}")
+    print()
+
+    try:
+        dataset = collect_by_market_code(
+            market_code=market_code,
+            limit=10,
+        )
+
+    except CFTCError as exc:
+        print("Status: FAILED")
+        print(f"Reason: {exc}")
+        return 1
+
+    dataframe = add_positioning_metrics(
+        dataset.dataframe
+    )
+
+    if dataframe.empty:
+        print("Status: FAILED")
+        print("Reason: No normalized CFTC rows.")
+        return 1
+
+    print("Status: OK")
+    print(f"Rows:   {len(dataframe)}")
+    print()
+
+    latest = dataframe.iloc[-1]
+
+    print("LATEST REPORT")
+    print("-" * 70)
+
+    print(
+        f"Report date: "
+        f"{latest['report_date']}"
+    )
+
+    print(
+        f"Market: "
+        f"{latest['market_and_exchange']}"
+    )
+
+    print(
+        f"Commodity: "
+        f"{latest['commodity_name']}"
+    )
+
+    print(
+        f"Open interest: "
+        f"{latest['open_interest']:,.0f}"
+    )
+
+    metric_labels = {
+        "producer_long": "Producer long",
+        "producer_short": "Producer short",
+        "producer_net": "Producer net",
+        "swap_long": "Swap long",
+        "swap_short": "Swap short",
+        "swap_net": "Swap net",
+        "managed_money_long": "Managed Money long",
+        "managed_money_short": "Managed Money short",
+        "managed_money_net": "Managed Money net",
+        "other_reportable_long": "Other Reportable long",
+        "other_reportable_short": "Other Reportable short",
+        "other_reportable_net": "Other Reportable net",
+    }
+
+    print()
+
+    for column, label in metric_labels.items():
+
+        if column not in latest.index:
+            continue
+
+        value = latest[column]
+
+        if value != value:
+            continue
+
+        print(
+            f"{label:<24} "
+            f"{value:>12,.0f}"
+        )
+
+    print()
+    print(
+        f"Retrieved at: "
+        f"{dataset.retrieved_at.isoformat()}"
+    )
+
+    return 0
+
+
 def probe_source(
     instrument_key: str,
     source: str,
 ) -> int:
     """
-    Route probe request.
+    Route probe request to a selected collector.
     """
 
     try:
@@ -205,10 +384,19 @@ def probe_source(
     print()
 
     if normalized_source == "STOOQ":
-        return probe_stooq(instrument)
+        return probe_stooq(
+            instrument
+        )
 
     if normalized_source == "YAHOO":
-        return probe_yahoo(instrument)
+        return probe_yahoo(
+            instrument
+        )
+
+    if normalized_source == "CFTC":
+        return probe_cftc(
+            instrument
+        )
 
     available = ", ".join(
         SUPPORTED_PROBE_SOURCES
@@ -231,12 +419,14 @@ def run(
     argv: Sequence[str] | None = None,
 ) -> int:
     """
-    Execute CLI.
+    Execute CLI command.
     """
 
     parser = build_parser()
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(
+        argv
+    )
 
     if args.command == "list":
         print_instrument_list()
