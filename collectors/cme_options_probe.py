@@ -103,20 +103,12 @@ VOLUME_OI_PATTERN = re.compile(
 ACTIVE_ROW_PATTERN = re.compile(
     r"""
     ^.*?
-    \s
+    \s[+-]\s
     (?P<volume>\d+|----)
     \s+
     (?P<open_interest>\d+)
     \s+
-    (?P<change>
-        [+-]?\d+
-        |
-        [+-]?UNCH
-        |
-        ----
-        |
-        -----
-    )
+    (?P<change>[+-]?\d+|\+?NEW|UNCH|-----)
     \s+
     (?P<trades>\d+|UNCH)
     .*?
@@ -165,6 +157,26 @@ NO_CHANGE_ROW_PATTERN = re.compile(
     """,
     re.VERBOSE,
 )
+
+SIGNED_UNCH_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \s
+    (?P<volume>\d+|----)
+    \s+
+    (?P<open_interest>\d+)
+    \s+
+    (?P<change>[+-]UNCH)
+    \s+
+    (?P<trades>\d+|UNCH)
+    .*?
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
+)
+
 
 def inspect_unparsed_rows(
     market_key: str,
@@ -559,6 +571,7 @@ def parse_volume_oi_row(
     patterns = (
         ("ACTIVE", ACTIVE_ROW_PATTERN),
         ("CAB", CAB_ROW_PATTERN),
+        ("SIGNED_UNCH", SIGNED_UNCH_ROW_PATTERN),
         ("NO_CHANGE", NO_CHANGE_ROW_PATTERN),
     )
 
@@ -748,7 +761,7 @@ def inspect_section_matches(
         if "FUTURES SETT." in line:
             break
 
-        if not re.search(r"\d+\s*$", line):
+        if not re.search(r"----\s*\d+\s*$", line):
             continue
 
         parsed = parse_volume_oi_row(line)
@@ -1069,6 +1082,338 @@ def inspect_row_tails(
     if rows:
         print(f"Strike range: {rows[0][1]:.1f} -> {rows[-1][1]:.1f}")
 
+@dataclass(frozen=True, slots=True)
+class ValidationResult:
+    """
+    Validation result for one CME option expiration.
+    """
+
+    expiration: str
+    option_type: str
+
+    rows: int
+
+    parsed_volume: int
+    reported_volume: int
+
+    parsed_oi: int
+    reported_oi: int
+
+    @property
+    def volume_ok(self) -> bool:
+        return (
+            self.parsed_volume
+            == self.reported_volume
+        )
+
+    @property
+    def oi_ok(self) -> bool:
+        return (
+            self.parsed_oi
+            == self.reported_oi
+        )
+
+    @property
+    def ok(self) -> bool:
+        return (
+            self.volume_ok
+            and self.oi_ok
+        )
+
+
+VALIDATION_HEADER_PATTERN = re.compile(
+    r"""
+    FUTURES\s+SETT\.
+    .*?
+    (?P<expiration>[A-Z]{3}\d{2})
+    $
+    """,
+    re.VERBOSE,
+)
+
+
+VALIDATION_TOTAL_PATTERN = re.compile(
+    r"""
+    ^TOTAL
+    \s+
+    (?P<volume>\d+)
+    \s+
+    (?P<open_interest>\d+)
+    """,
+    re.VERBOSE,
+)
+
+
+def validate_option_text(
+    text: str,
+    option_type: str,
+) -> list[ValidationResult]:
+    """
+    Validate all expiration sections in one CME option bulletin.
+    """
+
+    normalized_type = (
+        option_type
+        .strip()
+        .upper()
+    )
+
+    if normalized_type not in {
+        "CALL",
+        "PUT",
+    }:
+        raise ValueError(
+            "option_type must be CALL or PUT."
+        )
+
+    results: list[ValidationResult] = []
+
+    current_expiration: str | None = None
+
+    parsed_volume = 0
+    parsed_oi = 0
+    rows = 0
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        header_match = (
+            VALIDATION_HEADER_PATTERN.search(
+                line
+            )
+        )
+
+        if header_match is not None:
+
+            current_expiration = (
+                header_match.group(
+                    "expiration"
+                )
+            )
+
+            parsed_volume = 0
+            parsed_oi = 0
+            rows = 0
+
+            continue
+
+        if current_expiration is None:
+            continue
+
+        total_match = (
+            VALIDATION_TOTAL_PATTERN.search(
+                line
+            )
+        )
+
+        if total_match is not None:
+
+            results.append(
+                ValidationResult(
+                    expiration=(
+                        current_expiration
+                    ),
+                    option_type=(
+                        normalized_type
+                    ),
+                    rows=rows,
+                    parsed_volume=(
+                        parsed_volume
+                    ),
+                    reported_volume=int(
+                        total_match.group(
+                            "volume"
+                        )
+                    ),
+                    parsed_oi=(
+                        parsed_oi
+                    ),
+                    reported_oi=int(
+                        total_match.group(
+                            "open_interest"
+                        )
+                    ),
+                )
+            )
+
+            current_expiration = None
+
+            parsed_volume = 0
+            parsed_oi = 0
+            rows = 0
+
+            continue
+
+        parsed_row = parse_volume_oi_row(
+            line
+        )
+
+        if parsed_row is None:
+            continue
+
+        (
+            _strike_raw,
+            volume,
+            open_interest,
+            _format_name,
+        ) = parsed_row
+
+        rows += 1
+
+        parsed_volume += volume
+        parsed_oi += open_interest
+
+    return results
+
+
+def validate_market(
+    market_key: str,
+) -> bool:
+    """
+    Validate every expiration found in both CME option bulletins.
+    """
+
+    normalized_market = (
+        market_key
+        .strip()
+        .lower()
+    )
+
+    try:
+        definition = BULLETINS[
+            normalized_market
+        ]
+    except KeyError as exc:
+        available = ", ".join(
+            sorted(BULLETINS)
+        )
+
+        raise CMEOptionsProbeError(
+            f"Unknown market: {market_key!r}. "
+            f"Available: {available}"
+        ) from exc
+
+    reports = (
+        (
+            "CALL",
+            definition.call_file,
+        ),
+        (
+            "PUT",
+            definition.put_file,
+        ),
+    )
+
+    results: list[ValidationResult] = []
+
+    for option_type, filename in reports:
+
+        text = extract_text(
+            download_pdf(
+                bulletin_url(
+                    filename
+                )
+            )
+        )
+
+        results.extend(
+            validate_option_text(
+                text=text,
+                option_type=option_type,
+            )
+        )
+
+    print("=" * 110)
+    print(
+        f"CME OPTIONS VALIDATION - "
+        f"{definition.name}"
+    )
+    print("=" * 110)
+
+    print(
+        f"{'Expiration':<12}"
+        f"{'Type':<8}"
+        f"{'Rows':>8}"
+        f"{'Volume':>22}"
+        f"{'Open Interest':>26}"
+        f"{'Status':>12}"
+    )
+
+    print("-" * 110)
+
+    for result in results:
+
+        volume_text = (
+            f"{result.parsed_volume:,}"
+            f"/"
+            f"{result.reported_volume:,}"
+        )
+
+        oi_text = (
+            f"{result.parsed_oi:,}"
+            f"/"
+            f"{result.reported_oi:,}"
+        )
+
+        status = (
+            "PASS"
+            if result.ok
+            else "FAIL"
+        )
+
+        print(
+            f"{result.expiration:<12}"
+            f"{result.option_type:<8}"
+            f"{result.rows:>8,}"
+            f"{volume_text:>22}"
+            f"{oi_text:>26}"
+            f"{status:>12}"
+        )
+
+    print("-" * 110)
+
+    if not results:
+        print(
+            "OVERALL VALIDATION: FAIL"
+        )
+        print(
+            "No expiration sections found."
+        )
+        return False
+
+    failed = [
+        result
+        for result in results
+        if not result.ok
+    ]
+
+    print()
+
+    if failed:
+        print(
+            "OVERALL VALIDATION: FAIL"
+        )
+
+        print(
+            f"Failed sections: "
+            f"{len(failed)}"
+        )
+
+        return False
+
+    print(
+        "OVERALL VALIDATION: PASS"
+    )
+
+    print(
+        f"Validated sections: "
+        f"{len(results)}"
+    )
+
+    return True
 
 def main() -> None:
     """
