@@ -3,17 +3,12 @@ CME futures-options collector.
 
 The collector reads CME Daily Bulletin option reports and converts
 their extracted text into normalized option-contract records.
-
-The initial parser intentionally handles only fields whose layout
-has been verified against the CME livestock bulletins.
 """
 
 from __future__ import annotations
 
 import re
-
 from dataclasses import dataclass
-from datetime import datetime
 from io import BytesIO
 
 import requests
@@ -40,6 +35,8 @@ class CMEOptionPoint:
     One parsed CME futures-option strike.
     """
 
+    series: str
+
     expiration_code: str
     option_type: str
 
@@ -47,6 +44,10 @@ class CMEOptionPoint:
     strike: float
 
     futures_settlement: float | None
+    delta: float | None
+
+    volume: int
+    open_interest: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,20 +72,121 @@ BULLETIN_FILES: dict[str, BulletinFiles] = {
 }
 
 
-SECTION_PATTERN = re.compile(
-    r"\("
-    r"FUTURES\s+SETT\.\s*"
-    r"(?P<settlement>\d+(?:\.\d+)?)"
-    r".*?"
-    r"\)"
-    r"(?P<expiration>[A-Z]{3}\d{2})"
+SECTION_HEADER_PATTERN = re.compile(
+    r"""
+    ^
+    (?P<series_label>.*?)?
+    \(?
+    FUTURES\s+SETT\.
+    \s*
+    (?P<settlement>(?:\d+(?:\.\d+)?|\.\d+))
+    .*?
+    \)?
+    \s*
+    (?P<expiration>[A-Z]{3}\d{2})
+    $
+    """,
+    re.VERBOSE,
 )
 
-
-STRIKE_PATTERN = re.compile(
-    r"(?P<strike>\d+)\s*$"
+ROW_TAIL_PATTERN = re.compile(
+    r"""
+    (?P<delta>\.\d{3}|1\.000)
+    \s+
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
 )
 
+ACTIVE_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \s[+-]\s
+    (?P<volume>\d+|----)
+    \s+
+    (?P<open_interest>\d+)
+    \s+
+    (?P<change>[+-]?\d+|\+?NEW|UNCH|-----)
+    \s+
+    (?P<trades>\d+|UNCH)
+    .*?
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
+)
+
+CAB_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \sCAB
+    \s+
+    (?P<volume>\d+|----)
+    \s+
+    (?P<open_interest>\d+)
+    \s+
+    (?P<change>[+-]?\d+|UNCH|----|-----)
+    \s+
+    (?P<trades>\d+|UNCH)
+    .*?
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
+)
+
+SIGNED_UNCH_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \s
+    (?P<volume>\d+|----)
+    \s+
+    (?P<open_interest>\d+)
+    \s+
+    (?P<change>[+-]UNCH)
+    \s+
+    (?P<trades>\d+|UNCH)
+    .*?
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
+)
+
+NO_CHANGE_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \s
+    (?P<volume>\d+|----)
+    \s+
+    (?P<open_interest>\d+)
+    \s+
+    (?P<change>UNCH)
+    \s+
+    (?P<trades>UNCH)
+    .*?
+    ----
+    (?P<strike>\d+)
+    $
+    """,
+    re.VERBOSE,
+)
+
+TOTAL_PATTERN = re.compile(
+    r"""
+    ^TOTAL
+    \s+
+    (?P<volume>\d+)
+    \s+
+    (?P<open_interest>\d+)
+    """,
+    re.VERBOSE,
+)
 
 def _bulletin_url(
     filename: str,
@@ -93,9 +195,7 @@ def _bulletin_url(
     Build the current CME Daily Bulletin URL.
     """
 
-    return (
-        f"{BASE_URL}/{filename}"
-    )
+    return f"{BASE_URL}/{filename}"
 
 
 def _download_pdf(
@@ -106,9 +206,7 @@ def _download_pdf(
     Download one CME Daily Bulletin PDF.
     """
 
-    url = _bulletin_url(
-        filename
-    )
+    url = _bulletin_url(filename)
 
     try:
         response = requests.get(
@@ -146,28 +244,21 @@ def _extract_text(
     """
 
     try:
-        reader = PdfReader(
-            BytesIO(pdf_bytes)
-        )
-
+        reader = PdfReader(BytesIO(pdf_bytes))
         pages: list[str] = []
 
         for page in reader.pages:
             text = page.extract_text()
 
             if text:
-                pages.append(
-                    text
-                )
+                pages.append(text)
 
     except Exception as exc:
         raise CMEOptionsError(
             f"Unable to parse CME PDF: {exc}"
         ) from exc
 
-    result = "\n".join(
-        pages
-    ).strip()
+    result = "\n".join(pages).strip()
 
     if not result:
         raise CMEOptionsError(
@@ -177,16 +268,82 @@ def _extract_text(
     return result
 
 
+def normalize_series_label(
+    label: str | None,
+) -> str:
+    """
+    Normalize the option-series label found in the bulletin header.
+    """
+
+    if label is None:
+        return "STANDARD"
+
+    normalized = label.strip().upper()
+
+    if not normalized or normalized in {
+        "LEAN HOGS CALL",
+        "LEAN HOGS PUT",
+        "LV CATTLE CALL",
+        "LV CATTLE PUT",
+    }:
+        return "STANDARD"
+
+    if normalized == "WLC OPT":
+        return "WLC"
+
+    return normalized
+
+
+def parse_volume_oi_row(
+    line: str,
+) -> tuple[int, int, int, str] | None:
+    """
+    Parse volume, open interest and raw strike from one CME option row.
+
+    Return:
+        strike_raw
+        volume
+        open_interest
+        matched_format
+    """
+
+    patterns = (
+        ("ACTIVE", ACTIVE_ROW_PATTERN),
+        ("CAB", CAB_ROW_PATTERN),
+        ("SIGNED_UNCH", SIGNED_UNCH_ROW_PATTERN),
+        ("NO_CHANGE", NO_CHANGE_ROW_PATTERN),
+    )
+
+    for format_name, pattern in patterns:
+        match = pattern.match(line)
+
+        if match is None:
+            continue
+
+        volume_text = match.group("volume")
+
+        if volume_text == "----":
+            volume = 0
+        else:
+            volume = int(volume_text)
+
+        return (
+            int(match.group("strike")),
+            volume,
+            int(match.group("open_interest")),
+            format_name,
+        )
+
+    return None
+
+
 def _parse_option_text(
     text: str,
     option_type: str,
     strike_scale: float,
 ) -> list[CMEOptionPoint]:
     """
-    Parse expiration, underlying settlement and strikes.
-
-    Open interest, volume and option settlement are deliberately
-    excluded from this first parser version.
+    Parse option series, expiration, settlement, delta, volume, open interest and strikes.
     """
 
     if strike_scale <= 0:
@@ -194,16 +351,9 @@ def _parse_option_text(
             "strike_scale must be greater than zero."
         )
 
-    normalized_type = (
-        option_type
-        .strip()
-        .upper()
-    )
+    normalized_type = option_type.strip().upper()
 
-    if normalized_type not in {
-        "CALL",
-        "PUT",
-    }:
+    if normalized_type not in {"CALL", "PUT"}:
         raise ValueError(
             "option_type must be CALL or PUT."
         )
@@ -212,6 +362,10 @@ def _parse_option_text(
 
     current_expiration: str | None = None
     current_futures_settlement: float | None = None
+    current_series = "STANDARD"
+
+    section_volume = 0
+    section_open_interest = 0
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -219,71 +373,99 @@ def _parse_option_text(
         if not line:
             continue
 
-        section_match = (
-            SECTION_PATTERN.search(
-                line
-            )
-        )
+        header_match = SECTION_HEADER_PATTERN.search(line)
 
-        if section_match:
-
-            current_expiration = (
-                section_match.group(
-                    "expiration"
-                )
-            )
-
+        if header_match is not None:
+            current_expiration = header_match.group("expiration")
             current_futures_settlement = float(
-                section_match.group(
-                    "settlement"
-                )
+                header_match.group("settlement")
             )
+            current_series = normalize_series_label(
+                header_match.group("series_label")
+            )
+
+            section_volume = 0
+            section_open_interest = 0
 
             continue
 
         if current_expiration is None:
             continue
 
-        if line.startswith(
-            "TOTAL"
-        ):
+        total_match = TOTAL_PATTERN.search(line)
+
+        if total_match is not None:
+            reported_volume = int(
+                total_match.group("volume")
+            )
+            reported_open_interest = int(
+                total_match.group("open_interest")
+            )
+
+            if section_volume != reported_volume:
+                raise CMEOptionsError(
+                    "CME option volume validation failed: "
+                    f"{current_series} "
+                    f"{current_expiration} "
+                    f"{normalized_type}: "
+                    f"parsed={section_volume:,}, "
+                    f"reported={reported_volume:,}."
+                )
+
+            if section_open_interest != reported_open_interest:
+                raise CMEOptionsError(
+                    "CME option open-interest validation failed: "
+                    f"{current_series} "
+                    f"{current_expiration} "
+                    f"{normalized_type}: "
+                    f"parsed={section_open_interest:,}, "
+                    f"reported={reported_open_interest:,}."
+                )
+
             current_expiration = None
             current_futures_settlement = None
+            current_series = "STANDARD"
+
+            section_volume = 0
+            section_open_interest = 0
+
             continue
 
-        strike_match = STRIKE_PATTERN.search(
-            line
-        )
+        parsed_row = parse_volume_oi_row(line)
 
-        if strike_match is None:
+        if parsed_row is None:
             continue
 
-        strike_raw = int(
-            strike_match.group(
-                "strike"
-            )
-        )
+        (
+            strike_raw,
+            volume,
+            open_interest,
+            _format_name,
+        ) = parsed_row
 
-        strike = (
-            strike_raw
-            / strike_scale
+        section_volume += volume
+        section_open_interest += open_interest
+
+        strike = strike_raw / strike_scale
+
+        tail_match = ROW_TAIL_PATTERN.search(line)
+        delta = (
+            float(tail_match.group("delta"))
+            if tail_match is not None
+            else None
         )
 
         points.append(
             CMEOptionPoint(
-                expiration_code=(
-                    current_expiration
-                ),
-                option_type=(
-                    normalized_type
-                ),
-                strike_raw=(
-                    strike_raw
-                ),
+                series=current_series,
+                expiration_code=current_expiration,
+                option_type=normalized_type,
+                strike_raw=strike_raw,
                 strike=strike,
-                futures_settlement=(
-                    current_futures_settlement
-                ),
+                futures_settlement=current_futures_settlement,
+                delta=delta,
+                volume=volume,
+                open_interest=open_interest,
             )
         )
 
@@ -297,16 +479,10 @@ def _files_for_instrument(
     Resolve CME bulletin filenames from instrument metadata.
     """
 
-    root = (
-        instrument.futures_root
-        .strip()
-        .upper()
-    )
+    root = instrument.futures_root.strip().upper()
 
     try:
-        return BULLETIN_FILES[
-            root
-        ]
+        return BULLETIN_FILES[root]
 
     except KeyError as exc:
         raise CMEOptionsError(
@@ -322,51 +498,31 @@ def collect_options(
     Collect currently published CME option strikes.
     """
 
-    files = _files_for_instrument(
-        instrument
-    )
+    files = _files_for_instrument(instrument)
 
-    call_text = _extract_text(
-        _download_pdf(
-            files.calls
-        )
-    )
-
-    put_text = _extract_text(
-        _download_pdf(
-            files.puts
-        )
-    )
+    call_text = _extract_text(_download_pdf(files.calls))
+    put_text = _extract_text(_download_pdf(files.puts))
 
     calls = _parse_option_text(
         text=call_text,
         option_type="CALL",
-        strike_scale=(
-            instrument.option_strike_scale
-        ),
+        strike_scale=instrument.option_strike_scale,
     )
 
     puts = _parse_option_text(
         text=put_text,
         option_type="PUT",
-        strike_scale=(
-            instrument.option_strike_scale
-        ),
+        strike_scale=instrument.option_strike_scale,
     )
 
-    points = (
-        calls
-        + puts
-    )
+    points = calls + puts
 
     if not points:
         raise CMEOptionsError(
             "No CME option strikes parsed."
         )
 
-    return tuple(
-        points
-    )
+    return tuple(points)
 
 
 def print_options_sample(
@@ -377,39 +533,47 @@ def print_options_sample(
     Print a small sample of parsed option strikes.
     """
 
-    print("=" * 78)
+    print("=" * 100)
     print("CME OPTIONS PARSER")
-    print("=" * 78)
+    print("=" * 100)
 
     print(
+        f"{'Series':<10}"
         f"{'Expiration':<12}"
-        f"{'Type':<8}"
-        f"{'Strike':>12}"
-        f"{'Raw':>10}"
-        f"{'Fut Settle':>14}"
+        f"{'Type':<6}"
+        f"{'Strike':>10}"
+        f"{'Raw':>8}"
+        f"{'Fut Settle':>12}"
+        f"{'Delta':>8}"
+        f"{'Volume':>10}"
+        f"{'Open Int':>12}"
     )
 
-    print("-" * 78)
+    print("-" * 100)
 
     for point in points[:limit]:
-
-        if point.futures_settlement is None:
-            futures_text = "-"
-        else:
-            futures_text = (
-                f"{point.futures_settlement:.3f}"
-            )
+        futures_text = (
+            f"{point.futures_settlement:.3f}"
+            if point.futures_settlement is not None
+            else "-"
+        )
+        delta_text = (
+            f"{point.delta:.3f}"
+            if point.delta is not None
+            else "-"
+        )
 
         print(
+            f"{point.series:<10}"
             f"{point.expiration_code:<12}"
-            f"{point.option_type:<8}"
-            f"{point.strike:>12.3f}"
-            f"{point.strike_raw:>10}"
-            f"{futures_text:>14}"
+            f"{point.option_type:<6}"
+            f"{point.strike:>10.3f}"
+            f"{point.strike_raw:>8}"
+            f"{futures_text:>12}"
+            f"{delta_text:>8}"
+            f"{point.volume:>10,}"
+            f"{point.open_interest:>12,}"
         )
 
     print()
-    print(
-        f"Parsed records: {len(points):,}"
-    )
-
+    print(f"Parsed records: {len(points):,}")
