@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from io import BytesIO
 
 import requests
@@ -60,6 +61,26 @@ class BulletinFiles:
     puts: str
 
 
+@dataclass(frozen=True, slots=True)
+class BulletinMetadata:
+    """
+    Metadata extracted from one CME options bulletin.
+    """
+
+    bulletin_date: date
+    option_expirations: dict[str, date]
+
+
+@dataclass(frozen=True, slots=True)
+class CMEOptionsChain:
+    """
+    Parsed CME options chain with bulletin metadata.
+    """
+
+    points: tuple[CMEOptionPoint, ...]
+    metadata: BulletinMetadata
+
+
 BULLETIN_FILES: dict[str, BulletinFiles] = {
     "HE": BulletinFiles(
         calls="Section19_Lean_Hogs_Call_Options.pdf",
@@ -71,6 +92,20 @@ BULLETIN_FILES: dict[str, BulletinFiles] = {
     ),
 }
 
+BULLETIN_DATE_PATTERN = re.compile(
+    r"""
+    \b
+    (?P<weekday>Mon|Tue|Wed|Thu|Fri|Sat|Sun),
+    \s+
+    (?P<month>[A-Z][a-z]{2})
+    \s+
+    (?P<day>\d{1,2}),
+    \s+
+    (?P<year>\d{4})
+    \b
+    """,
+    re.VERBOSE,
+)
 
 SECTION_HEADER_PATTERN = re.compile(
     r"""
@@ -266,6 +301,117 @@ def _extract_text(
         )
 
     return result
+
+
+def _parse_bulletin_metadata(
+    text: str,
+) -> BulletinMetadata:
+    """
+    Parse bulletin date and option expiration dates.
+    """
+
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+    bulletin_date: date | None = None
+
+    for line in lines[:20]:
+        match = BULLETIN_DATE_PATTERN.search(line)
+
+        if match is None:
+            continue
+
+        bulletin_date = datetime.strptime(
+            (
+                f"{match.group('month')} "
+                f"{match.group('day')} "
+                f"{match.group('year')}"
+            ),
+            "%b %d %Y",
+        ).date()
+
+        break
+
+    if bulletin_date is None:
+        raise CMEOptionsError(
+            "Unable to parse CME bulletin date."
+        )
+
+    expiration_codes: list[str] | None = None
+    expiration_dates: list[str] | None = None
+
+    for index, line in enumerate(lines):
+
+        if line.startswith("LEAN HOGS OPT "):
+            expiration_dates = line.split()[3:]
+        elif line.startswith("LV CATTLE OPT "):
+            expiration_dates = line.split()[3:]
+        else:
+            continue
+
+        if index == 0:
+            break
+
+        expiration_codes = lines[index - 2].split()
+
+        break
+
+    if (
+        expiration_codes is None
+        or expiration_dates is None
+    ):
+        raise CMEOptionsError(
+            "Unable to parse CME option expiration dates."
+        )
+
+    if len(expiration_codes) != len(expiration_dates):
+        raise CMEOptionsError(
+            "CME option expiration codes and dates "
+            "have different lengths."
+        )
+
+    option_expirations: dict[str, date] = {}
+
+    for expiration_code, month_day in zip(
+        expiration_codes,
+        expiration_dates,
+    ):
+        month_text, day_text = month_day.split("/")
+
+        month = int(month_text)
+        day = int(day_text)
+
+        contract_year = 2000 + int(
+            expiration_code[-2:]
+        )
+
+        contract_month_text = (
+            expiration_code[:3]
+        )
+
+        contract_month = datetime.strptime(
+            contract_month_text,
+            "%b",
+        ).month
+
+        year = contract_year
+
+        if month > contract_month:
+            year -= 1
+
+        option_expirations[expiration_code] = date(
+            year,
+            month,
+            day,
+        )
+
+    return BulletinMetadata(
+        bulletin_date=bulletin_date,
+        option_expirations=option_expirations,
+    )
 
 
 def normalize_series_label(
@@ -491,17 +637,25 @@ def _files_for_instrument(
         ) from exc
 
 
-def collect_options(
+def collect_options_chain(
     instrument: InstrumentConfig,
-) -> tuple[CMEOptionPoint, ...]:
+) -> CMEOptionsChain:
     """
-    Collect currently published CME option strikes.
+    Collect CME option strikes together with bulletin metadata.
     """
 
     files = _files_for_instrument(instrument)
 
-    call_text = _extract_text(_download_pdf(files.calls))
-    put_text = _extract_text(_download_pdf(files.puts))
+    call_text = _extract_text(
+        _download_pdf(files.calls)
+    )
+    put_text = _extract_text(
+        _download_pdf(files.puts)
+    )
+
+    metadata = _parse_bulletin_metadata(
+        call_text
+    )
 
     calls = _parse_option_text(
         text=call_text,
@@ -515,14 +669,31 @@ def collect_options(
         strike_scale=instrument.option_strike_scale,
     )
 
-    points = calls + puts
+    points = tuple(
+        calls + puts
+    )
 
     if not points:
         raise CMEOptionsError(
             "No CME option strikes parsed."
         )
 
-    return tuple(points)
+    return CMEOptionsChain(
+        points=points,
+        metadata=metadata,
+    )
+
+
+def collect_options(
+    instrument: InstrumentConfig,
+) -> tuple[CMEOptionPoint, ...]:
+    """
+    Collect currently published CME option strikes.
+    """
+
+    return collect_options_chain(
+        instrument
+    ).points
 
 
 def print_options_sample(

@@ -8,8 +8,13 @@ open-interest and delta-exposure summaries.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
-from collectors.cme_options import CMEOptionPoint
+from collectors.cme_options import (
+    CMEOptionPoint,
+    CMEOptionsChain,
+)
+
 from config import InstrumentConfig
 
 
@@ -21,6 +26,9 @@ class OptionExposure:
 
     series: str
     expiration_code: str
+    expiration_date: date | None
+    bulletin_date: date | None
+
     option_type: str
 
     strike: float
@@ -31,6 +39,7 @@ class OptionExposure:
     delta: float | None
 
     delta_exposure: float | None
+    time_to_expiry: float | None
 
 
 def calculate_delta_exposure(
@@ -61,8 +70,29 @@ def calculate_delta_exposure(
     )
 
 
+def calculate_time_to_expiry(
+    bulletin_date: date,
+    expiration_date: date,
+) -> float | None:
+    """
+    Calculate time to expiration in years.
+
+    Expired contracts return None.
+    """
+
+    days = (
+        expiration_date
+        - bulletin_date
+    ).days
+
+    if days <= 0:
+        return None
+
+    return days / 365.0
+
+
 def build_option_exposures(
-    points: tuple[CMEOptionPoint, ...],
+    chain: CMEOptionsChain,
     instrument: InstrumentConfig,
     series: str = "STANDARD",
 ) -> tuple[OptionExposure, ...]:
@@ -74,29 +104,59 @@ def build_option_exposures(
 
     exposures: list[OptionExposure] = []
 
-    for point in points:
+    for point in chain.points:
 
         if point.series != normalized_series:
             continue
 
+        expiration_date = (
+            chain.metadata.option_expirations.get(
+                point.expiration_code
+            )
+        )
+
+        time_to_expiry = None
+
+        if expiration_date is not None:
+            time_to_expiry = calculate_time_to_expiry(
+                bulletin_date=(
+                    chain.metadata.bulletin_date
+                ),
+                expiration_date=expiration_date,
+            )
+
         exposures.append(
             OptionExposure(
                 series=point.series,
-                expiration_code=point.expiration_code,
+                expiration_code=(
+                    point.expiration_code
+                ),
+                expiration_date=expiration_date,
+                bulletin_date=(
+                    chain.metadata.bulletin_date
+                ),
+
                 option_type=point.option_type,
+
                 strike=point.strike,
-                futures_settlement=point.futures_settlement,
+                futures_settlement=(
+                    point.futures_settlement
+                ),
+
                 volume=point.volume,
                 open_interest=point.open_interest,
                 delta=point.delta,
+
                 delta_exposure=calculate_delta_exposure(
                     point=point,
                     instrument=instrument,
                 ),
+                time_to_expiry=time_to_expiry,
             )
         )
 
     return tuple(exposures)
+
 
 # delta=0.000   # CME rzeczywiście podało 0.000
 # delta=None    # CME nie podało numerycznej delty
