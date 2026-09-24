@@ -45,6 +45,7 @@ class CMEOptionPoint:
     strike: float
 
     futures_settlement: float | None
+    option_settlement: float | None
     delta: float | None
 
     volume: int
@@ -131,6 +132,31 @@ ROW_TAIL_PATTERN = re.compile(
     ----
     (?P<strike>\d+)
     $
+    """,
+    re.VERBOSE,
+)
+
+# nie wiem czy to potzrebny regex czy nie...
+OPTION_SETTLEMENT_PATTERN = re.compile(
+    r"""
+    ^.*?
+    ----
+    \s+
+    (?P<settlement>
+        \d+(?:\.\d+)?
+        |
+        \.\d+
+        |
+        CAB
+    )
+    \s+
+    (?:
+        [+-]
+        |
+        \d+
+        |
+        ----
+    )
     """,
     re.VERBOSE,
 )
@@ -483,6 +509,44 @@ def parse_volume_oi_row(
     return None
 
 
+def parse_option_settlement_row(
+    line: str,
+) -> float | None:
+    """
+    Parse option settlement price from one CME option row.
+
+    Cabinet settlements are returned as None because CAB is not
+    treated as a numeric settlement price.
+    """
+
+    parsed_row = parse_volume_oi_row(
+        line
+    )
+
+    if parsed_row is None:
+        return None
+
+    tokens = line.split()
+
+    if len(tokens) < 5:
+        return None
+
+    if tokens[3] != "----":
+        return None
+
+    settlement_text = tokens[4]
+
+    if settlement_text == "CAB":
+        return None
+
+    try:
+        return float(
+            settlement_text
+        )
+    except ValueError:
+        return None
+    
+
 def _parse_option_text(
     text: str,
     option_type: str,
@@ -594,7 +658,12 @@ def _parse_option_text(
 
         strike = strike_raw / strike_scale
 
+        option_settlement = (
+            parse_option_settlement_row(line)
+        )
+
         tail_match = ROW_TAIL_PATTERN.search(line)
+
         delta = (
             float(tail_match.group("delta"))
             if tail_match is not None
@@ -608,7 +677,12 @@ def _parse_option_text(
                 option_type=normalized_type,
                 strike_raw=strike_raw,
                 strike=strike,
-                futures_settlement=current_futures_settlement,
+                futures_settlement=(
+                    current_futures_settlement
+                ),
+                option_settlement=(
+                    option_settlement
+                ),
                 delta=delta,
                 volume=volume,
                 open_interest=open_interest,
