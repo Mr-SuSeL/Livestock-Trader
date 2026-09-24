@@ -230,12 +230,77 @@ def generate_candidates(
 ) -> list[ContractCandidate]:
     """
     Generate candidate futures contracts using instrument metadata.
+
+    When start_year is  UTC year is used
+    and contract months earlier than the current UTC month are skipped.
     """
 
+    now = datetime.now(
+        timezone.utc
+    )
+
+    automatic_start = (
+        start_year is None
+    )
+
     if start_year is None:
-        start_year = datetime.now(
-            timezone.utc
-        ).year
+        start_year = now.year
+
+    if years_forward < 0:
+        raise ValueError(
+            "years_forward cannot be negative."
+        )
+
+    root = (
+        instrument.futures_root
+        .strip()
+        .upper()
+    )
+
+    if not root:
+        raise FuturesCurveError(
+            f"No futures root configured "
+            f"for {instrument.name}."
+        )
+
+    months = validate_contract_months(
+        instrument.contract_months
+    )
+
+    candidates: list[ContractCandidate] = []
+
+    for year in range(
+        start_year,
+        start_year + years_forward + 1,
+    ):
+        for month in months:
+
+            if (
+                automatic_start
+                and year == now.year
+                and month < now.month
+            ):
+                continue
+
+            contract_code, provider_symbol = (
+                yahoo_contract_symbol(
+                    root=root,
+                    year=year,
+                    month=month,
+                )
+            )
+
+            candidates.append(
+                ContractCandidate(
+                    root=root,
+                    year=year,
+                    month=month,
+                    contract_code=contract_code,
+                    provider_symbol=provider_symbol,
+                )
+            )
+
+    return candidates
 
     if years_forward < 0:
         raise ValueError(
