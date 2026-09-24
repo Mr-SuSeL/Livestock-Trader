@@ -41,6 +41,8 @@ class InstrumentConfig:
 
     price_unit: str
 
+    option_strike_scale: float
+
     contract_months: tuple[int, ...]
 
     source_symbols: Mapping[str, str] = field(
@@ -86,6 +88,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         contract_size=40_000.0,
         point_value=400.0,
         price_unit="US cents per pound",
+        option_strike_scale=10.0,
         contract_months=(
             2,
             4,
@@ -114,6 +117,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         contract_size=40_000.0,
         point_value=400.0,
         price_unit="US cents per pound",
+        option_strike_scale=10.0,
         contract_months=(
             2,
             4,
