@@ -1084,10 +1084,7 @@ def inspect_row_tails(
 
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
-    """
-    Validation result for one CME option expiration.
-    """
-
+    series: str
     expiration: str
     option_type: str
 
@@ -1120,17 +1117,51 @@ class ValidationResult:
             and self.oi_ok
         )
 
+def normalize_series_label(
+    label: str | None,
+) -> str:
+    """
+    Normalize the option-series label found in the bulletin.
+    """
+
+    if label is None:
+        return "STANDARD"
+
+    normalized = (
+        label
+        .strip()
+        .upper()
+    )
+
+    if not normalized:
+        return "STANDARD"
+
+    if normalized in {
+        "LEAN HOGS CALL",
+        "LEAN HOGS PUT",
+        "LV CATTLE CALL",
+        "LV CATTLE PUT",
+    }:
+        return "STANDARD"
+
+    if normalized == "WLC OPT":
+        return "WLC"
+
+    return normalized
 
 VALIDATION_HEADER_PATTERN = re.compile(
     r"""
+    ^
+    (?P<series_label>.*?)?
+    \(?
     FUTURES\s+SETT\.
     .*?
+    \)?
     (?P<expiration>[A-Z]{3}\d{2})
     $
     """,
     re.VERBOSE,
 )
-
 
 VALIDATION_TOTAL_PATTERN = re.compile(
     r"""
@@ -1169,6 +1200,7 @@ def validate_option_text(
     results: list[ValidationResult] = []
 
     current_expiration: str | None = None
+    current_series = "STANDARD"
 
     parsed_volume = 0
     parsed_oi = 0
@@ -1194,6 +1226,12 @@ def validate_option_text(
                 )
             )
 
+            current_series = normalize_series_label(
+                header_match.group(
+                    "series_label"
+                )
+            )
+
             parsed_volume = 0
             parsed_oi = 0
             rows = 0
@@ -1213,24 +1251,17 @@ def validate_option_text(
 
             results.append(
                 ValidationResult(
-                    expiration=(
-                        current_expiration
-                    ),
-                    option_type=(
-                        normalized_type
-                    ),
+                    series=current_series,
+                    expiration=current_expiration,
+                    option_type=normalized_type,
                     rows=rows,
-                    parsed_volume=(
-                        parsed_volume
-                    ),
+                    parsed_volume=parsed_volume,
                     reported_volume=int(
                         total_match.group(
                             "volume"
                         )
                     ),
-                    parsed_oi=(
-                        parsed_oi
-                    ),
+                    parsed_oi=parsed_oi,
                     reported_oi=int(
                         total_match.group(
                             "open_interest"
@@ -1334,6 +1365,7 @@ def validate_market(
     print("=" * 110)
 
     print(
+        f"{'Series':<18}"
         f"{'Expiration':<12}"
         f"{'Type':<8}"
         f"{'Rows':>8}"
@@ -1341,6 +1373,7 @@ def validate_market(
         f"{'Open Interest':>26}"
         f"{'Status':>12}"
     )
+
 
     print("-" * 110)
 
@@ -1365,6 +1398,7 @@ def validate_market(
         )
 
         print(
+            f"{result.series:<18}"
             f"{result.expiration:<12}"
             f"{result.option_type:<8}"
             f"{result.rows:>8,}"
@@ -1372,6 +1406,7 @@ def validate_market(
             f"{oi_text:>26}"
             f"{status:>12}"
         )
+
 
     print("-" * 110)
 
