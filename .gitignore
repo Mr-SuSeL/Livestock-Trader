@@ -1,0 +1,48 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/*.json
+data/*.csv
+data/*.parquet
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# But keep directory in Git
+!data/.gitkeep
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
