@@ -41,9 +41,12 @@ class InstrumentConfig:
         default_factory=dict
     )
 
-    def symbol_for(self, source: str) -> str | None:
+    def symbol_for(
+        self,
+        source: str,
+    ) -> str | None:
         """
-        Return the symbol/root used by a specific provider.
+        Return symbol/root used by a specific provider.
         """
 
         return self.source_symbols.get(
@@ -63,6 +66,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         source_symbols={
             "CME": "HE",
             "STOOQ": "HE.F",
+            "YAHOO": "HE=F",
         },
     ),
 }
@@ -82,8 +86,11 @@ def get_instrument(
 
     try:
         return INSTRUMENTS[normalized]
+
     except KeyError as exc:
-        available = ", ".join(sorted(INSTRUMENTS))
+        available = ", ".join(
+            sorted(INSTRUMENTS)
+        )
 
         raise KeyError(
             f"Unknown instrument: {key!r}. "

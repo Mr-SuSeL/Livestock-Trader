@@ -1,38 +1,10 @@
 """
 Command-line entry point for the futures/options analytics platform.
-
-Examples
---------
-List configured instruments:
-
-    python main.py list
-
-Show one instrument:
-
-    python main.py show lean_hogs
-
-Probe one market-data source:
-
-    python main.py probe lean_hogs stooq
-
-The CLI deliberately separates:
-
-    instrument configuration
-            |
-            v
-        data source
-            |
-            v
-         collector
-
-Collectors therefore do not need to know what Lean Hogs,
-Live Cattle or any future market actually is.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 from typing import Sequence
 
 from config import (
@@ -43,15 +15,22 @@ from config import (
 )
 
 
+SUPPORTED_PROBE_SOURCES = (
+    "STOOQ",
+    "YAHOO",
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """
-    Build the command-line argument parser.
+    Build command-line parser.
     """
 
     parser = argparse.ArgumentParser(
         prog="market-lab",
         description=(
-            "Futures and options market-data analytics platform."
+            "Futures and options market-data "
+            "analytics platform."
         ),
     )
 
@@ -67,17 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_parser = subparsers.add_parser(
         "show",
-        help="Show configuration for one instrument.",
+        help="Show instrument configuration.",
     )
 
     show_parser.add_argument(
         "instrument",
         nargs="?",
         default=DEFAULT_INSTRUMENT,
-        help=(
-            "Internal instrument key, "
-            f"default: {DEFAULT_INSTRUMENT}"
-        ),
     )
 
     probe_parser = subparsers.add_parser(
@@ -87,12 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     probe_parser.add_argument(
         "instrument",
-        help="Internal instrument key.",
     )
 
     probe_parser.add_argument(
         "source",
-        help="Market-data source, e.g. stooq.",
     )
 
     return parser
@@ -100,16 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_instrument_list() -> None:
     """
-    Print all instruments configured in config.py.
+    Print configured instruments.
     """
 
     print("=" * 70)
     print("CONFIGURED INSTRUMENTS")
     print("=" * 70)
-
-    if not INSTRUMENTS:
-        print("No instruments configured.")
-        return
 
     for key, instrument in sorted(
         INSTRUMENTS.items()
@@ -127,7 +96,7 @@ def print_instrument(
     instrument: InstrumentConfig,
 ) -> None:
     """
-    Print configuration of one instrument.
+    Print one instrument configuration.
     """
 
     print("=" * 70)
@@ -146,26 +115,26 @@ def print_instrument(
     print()
     print("Provider symbols:")
 
-    if not instrument.source_symbols:
-        print("  none")
-        return
-
     for source, symbol in sorted(
         instrument.source_symbols.items()
     ):
-        print(f"  {source:<12} {symbol}")
+        print(
+            f"  {source:<12} {symbol}"
+        )
 
 
 def probe_stooq(
     instrument: InstrumentConfig,
 ) -> int:
     """
-    Probe Stooq using the symbol defined in InstrumentConfig.
+    Probe Stooq.
     """
 
     from collectors.stooq import probe
 
-    symbol = instrument.symbol_for("STOOQ")
+    symbol = instrument.symbol_for(
+        "STOOQ"
+    )
 
     if symbol is None:
         print(
@@ -179,14 +148,37 @@ def probe_stooq(
     return 0
 
 
+def probe_yahoo(
+    instrument: InstrumentConfig,
+) -> int:
+    """
+    Probe Yahoo Finance.
+    """
+
+    from collectors.yahoo_futures import probe
+
+    symbol = instrument.symbol_for(
+        "YAHOO"
+    )
+
+    if symbol is None:
+        print(
+            f"No YAHOO symbol configured "
+            f"for {instrument.name}."
+        )
+        return 2
+
+    success = probe(symbol)
+
+    return 0 if success else 1
+
+
 def probe_source(
     instrument_key: str,
     source: str,
 ) -> int:
     """
-    Dispatch a probe to the selected source.
-
-    New collectors will be registered here as we implement them.
+    Route probe request.
     """
 
     try:
@@ -205,22 +197,31 @@ def probe_source(
     print(
         f"Instrument: {instrument.name}"
     )
+
     print(
         f"Data source: {normalized_source}"
     )
+
     print()
 
     if normalized_source == "STOOQ":
         return probe_stooq(instrument)
 
+    if normalized_source == "YAHOO":
+        return probe_yahoo(instrument)
+
+    available = ", ".join(
+        SUPPORTED_PROBE_SOURCES
+    )
+
     print(
-        "ERROR: Unsupported probe source: "
+        f"ERROR: Unsupported source: "
         f"{normalized_source}"
     )
 
     print(
-        "Currently implemented probe sources: "
-        "STOOQ"
+        f"Supported probe sources: "
+        f"{available}"
     )
 
     return 2
@@ -230,7 +231,7 @@ def run(
     argv: Sequence[str] | None = None,
 ) -> int:
     """
-    Execute CLI command and return a process exit code.
+    Execute CLI.
     """
 
     parser = build_parser()
@@ -265,10 +266,6 @@ def run(
             source=args.source,
         )
 
-    parser.error(
-        f"Unsupported command: {args.command}"
-    )
-
     return 2
 
 
@@ -277,9 +274,9 @@ def main() -> None:
     Application entry point.
     """
 
-    exit_code = run()
-
-    raise SystemExit(exit_code)
+    raise SystemExit(
+        run()
+    )
 
 
 if __name__ == "__main__":
