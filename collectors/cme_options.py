@@ -129,8 +129,13 @@ ROW_TAIL_PATTERN = re.compile(
     r"""
     (?P<delta>\.\d{3}|1\.000)
     \s+
-    ----
-    (?P<strike>\d+)
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
     $
     """,
     re.VERBOSE,
@@ -161,6 +166,30 @@ OPTION_SETTLEMENT_PATTERN = re.compile(
     re.VERBOSE,
 )
 
+NEW_ROW_PATTERN = re.compile(
+    r"""
+    ^.*?
+    \s[+-]\s
+    (?P<volume>\d+)
+    \s+
+    (?P<open_interest>----)
+    (?P<change>\+?NEW)
+    \s+
+    (?P<trades>\d+|UNCH)
+    .*?
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
+    $
+    """,
+    re.VERBOSE,
+)
+
+
 ACTIVE_ROW_PATTERN = re.compile(
     r"""
     ^.*?
@@ -173,8 +202,13 @@ ACTIVE_ROW_PATTERN = re.compile(
     \s+
     (?P<trades>\d+|UNCH)
     .*?
-    ----
-    (?P<strike>\d+)
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
     $
     """,
     re.VERBOSE,
@@ -189,12 +223,17 @@ CAB_ROW_PATTERN = re.compile(
     \s+
     (?P<open_interest>\d+)
     \s+
-    (?P<change>[+-]?\d+|UNCH|----|-----)
+    (?P<change>[+-]?\d+|UNCH|[+-]?----|-----)
     \s+
     (?P<trades>\d+|UNCH)
     .*?
-    ----
-    (?P<strike>\d+)
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
     $
     """,
     re.VERBOSE,
@@ -212,8 +251,13 @@ SIGNED_UNCH_ROW_PATTERN = re.compile(
     \s+
     (?P<trades>\d+|UNCH)
     .*?
-    ----
-    (?P<strike>\d+)
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
     $
     """,
     re.VERBOSE,
@@ -231,8 +275,13 @@ NO_CHANGE_ROW_PATTERN = re.compile(
     \s+
     (?P<trades>UNCH)
     .*?
-    ----
-    (?P<strike>\d+)
+    (?:
+        ----
+        (?P<strike>\d+)
+        |
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
+    )
     $
     """,
     re.VERBOSE,
@@ -471,15 +520,10 @@ def parse_volume_oi_row(
 ) -> tuple[int, int, int, str] | None:
     """
     Parse volume, open interest and raw strike from one CME option row.
-
-    Return:
-        strike_raw
-        volume
-        open_interest
-        matched_format
     """
 
     patterns = (
+        ("NEW", NEW_ROW_PATTERN),
         ("ACTIVE", ACTIVE_ROW_PATTERN),
         ("CAB", CAB_ROW_PATTERN),
         ("SIGNED_UNCH", SIGNED_UNCH_ROW_PATTERN),
@@ -494,15 +538,31 @@ def parse_volume_oi_row(
 
         volume_text = match.group("volume")
 
-        if volume_text == "----":
-            volume = 0
-        else:
-            volume = int(volume_text)
+        volume = (
+            0
+            if volume_text == "----"
+            else int(volume_text)
+        )
+
+        open_interest_text = match.group(
+            "open_interest"
+        )
+
+        open_interest = (
+            0
+            if open_interest_text == "----"
+            else int(open_interest_text)
+        )
+
+        strike_text = (
+            match.group("strike")
+            or match.group("exercise_strike")
+        )
 
         return (
-            int(match.group("strike")),
+            int(strike_text),
             volume,
-            int(match.group("open_interest")),
+            open_interest,
             format_name,
         )
 
