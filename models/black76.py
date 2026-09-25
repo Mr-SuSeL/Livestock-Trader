@@ -191,3 +191,160 @@ def option_gamma(
             * math.sqrt(time_to_expiry)
         )
     )
+
+
+def option_price(
+    futures_price: float,
+    strike: float,
+    time_to_expiry: float,
+    volatility: float,
+    risk_free_rate: float,
+    option_type: str,
+) -> float:
+    """
+    Calculate Black-76 option price.
+    """
+
+    d1, d2 = d1_d2(
+        futures_price=futures_price,
+        strike=strike,
+        time_to_expiry=time_to_expiry,
+        volatility=volatility,
+    )
+
+    discount = math.exp(
+        -risk_free_rate * time_to_expiry
+    )
+
+    normalized_type = option_type.strip().upper()
+
+    if normalized_type == "CALL":
+        return discount * (
+            futures_price * _normal_cdf(d1)
+            - strike * _normal_cdf(d2)
+        )
+
+    if normalized_type == "PUT":
+        return discount * (
+            strike * _normal_cdf(-d2)
+            - futures_price * _normal_cdf(-d1)
+        )
+
+    raise ValueError(
+        "option_type must be CALL or PUT."
+    )
+
+
+def implied_volatility(
+    market_price: float,
+    futures_price: float,
+    strike: float,
+    time_to_expiry: float,
+    risk_free_rate: float,
+    option_type: str,
+    tolerance: float = 1e-8,
+    max_iterations: int = 200,
+) -> float | None:
+    """
+    Solve Black-76 implied volatility by bisection.
+
+    Return None when the market price does not admit
+    a valid positive-volatility solution.
+    """
+
+    if market_price <= 0:
+        return None
+
+    if futures_price <= 0:
+        return None
+
+    if strike <= 0:
+        return None
+
+    if time_to_expiry <= 0:
+        return None
+
+    normalized_type = option_type.strip().upper()
+
+    if normalized_type not in {"CALL", "PUT"}:
+        raise ValueError(
+            "option_type must be CALL or PUT."
+        )
+
+    discount = math.exp(
+        -risk_free_rate * time_to_expiry
+    )
+
+    if normalized_type == "CALL":
+        lower_bound = discount * max(
+            futures_price - strike,
+            0.0,
+        )
+        upper_bound = discount * futures_price
+
+    else:
+        lower_bound = discount * max(
+            strike - futures_price,
+            0.0,
+        )
+        upper_bound = discount * strike
+
+    if (
+        market_price <= lower_bound
+        or market_price >= upper_bound
+    ):
+        return None
+
+    low_volatility = 1e-6
+    high_volatility = 5.0
+
+    low_price = option_price(
+        futures_price=futures_price,
+        strike=strike,
+        time_to_expiry=time_to_expiry,
+        volatility=low_volatility,
+        risk_free_rate=risk_free_rate,
+        option_type=normalized_type,
+    )
+
+    high_price = option_price(
+        futures_price=futures_price,
+        strike=strike,
+        time_to_expiry=time_to_expiry,
+        volatility=high_volatility,
+        risk_free_rate=risk_free_rate,
+        option_type=normalized_type,
+    )
+
+    if not (
+        low_price <= market_price <= high_price
+    ):
+        return None
+
+    for _ in range(max_iterations):
+
+        volatility = (
+            low_volatility
+            + high_volatility
+        ) / 2.0
+
+        model_price = option_price(
+            futures_price=futures_price,
+            strike=strike,
+            time_to_expiry=time_to_expiry,
+            volatility=volatility,
+            risk_free_rate=risk_free_rate,
+            option_type=normalized_type,
+        )
+
+        error = model_price - market_price
+
+        if abs(error) <= tolerance:
+            return volatility
+
+        if error < 0:
+            low_volatility = volatility
+        else:
+            high_volatility = volatility
+
+    return None
