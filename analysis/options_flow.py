@@ -129,12 +129,16 @@ def calculate_gex_per_1pct(
         else -1.0
     )
 
+    one_percent_move = (
+        point.futures_settlement * 0.01
+    )
+
     return (
         direction
         * gamma
         * point.open_interest
-        * instrument.contract_size
-        * point.futures_settlement
+        * instrument.point_value
+        * one_percent_move
     )
 
 
