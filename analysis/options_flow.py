@@ -544,6 +544,18 @@ class GammaProfile:
     top_negative_net_walls: tuple[GammaWall, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class TraderProfile:
+    """
+    Combined options positioning profile for one expiration.
+    """
+
+    expiration_code: str
+    futures_settlement: float | None
+
+    gamma: GammaProfile
+    vanna: VannaProfile
+
 
 @dataclass(frozen=True, slots=True)
 class StrikeExposure:
@@ -970,4 +982,33 @@ def build_vanna_profile(
             )
             for point in top_negative
         ),
+    )
+
+
+def build_trader_profile(
+    exposures: tuple[OptionExposure, ...],
+    expiration_code: str,
+    top_n: int = 3,
+) -> TraderProfile:
+    """
+    Build combined GEX and VEX trader profile.
+    """
+
+    gamma = build_gamma_profile(
+        exposures=exposures,
+        expiration_code=expiration_code,
+        top_n=top_n,
+    )
+
+    vanna = build_vanna_profile(
+        exposures=exposures,
+        expiration_code=expiration_code,
+        top_n=top_n,
+    )
+
+    return TraderProfile(
+        expiration_code=gamma.expiration_code,
+        futures_settlement=gamma.futures_settlement,
+        gamma=gamma,
+        vanna=vanna,
     )
