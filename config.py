@@ -135,6 +135,31 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         },
     ),
 
+    "feeder_cattle": InstrumentConfig(
+        name="Feeder Cattle",
+        exchange="CME",
+        currency="USD",
+        futures_root="GF",
+        contract_size=50_000.0,
+        point_value=500.0,
+        price_unit="US cents per pound",
+        option_strike_scale=10.0,
+        contract_months=(
+            1,
+            3,
+            4,
+            5,
+            8,
+            9,
+            10,
+            11,
+        ),
+        source_symbols={
+            "CME": "GF",
+        },
+        source_ids={},
+    ),
+
 }
 
 

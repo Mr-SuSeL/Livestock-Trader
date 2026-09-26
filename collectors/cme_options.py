@@ -92,6 +92,10 @@ BULLETIN_FILES: dict[str, BulletinFiles] = {
         calls="Section15_Live_Cattle_Call_Options.pdf",
         puts="Section16_Live_Cattle_Put_Options.pdf",
     ),
+    "GF": BulletinFiles(
+        calls="Section17_Feeder_Cattle_Call_Options.pdf",
+        puts="Section18_Feeder_Cattle_Put_Options.pdf",
+    ),
 }
 
 BULLETIN_DATE_PATTERN = re.compile(
@@ -424,6 +428,8 @@ def _parse_bulletin_metadata(
         if line.startswith("LEAN HOGS OPT "):
             expiration_dates = line.split()[3:]
         elif line.startswith("LV CATTLE OPT "):
+            expiration_dates = line.split()[3:]
+        elif line.startswith("FDR CATTLE OPT "):
             expiration_dates = line.split()[3:]
         else:
             continue
