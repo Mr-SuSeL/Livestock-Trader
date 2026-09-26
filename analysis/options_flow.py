@@ -742,6 +742,20 @@ def aggregate_by_strike(
     return tuple(results)
 
 
+@dataclass(frozen=True, slots=True)
+class GEXZone:
+    expiration_code: str
+
+    low_strike: float
+    high_strike: float
+    peak_strike: float
+
+    net_gex_per_1pct: float
+    peak_gex_per_1pct: float
+
+    strike_count: int
+    strength: float
+
 
 def build_gamma_profile(
     exposures: tuple[OptionExposure, ...],
