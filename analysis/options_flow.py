@@ -631,6 +631,7 @@ class TraderProfile:
 
     gamma: GammaProfile
     vanna: VannaProfile
+    gex_zones: tuple["GEXZone", ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -843,6 +844,196 @@ class GEXZone:
 
     strike_count: int
     strength: float
+
+
+def _gex_significance_cutoff(
+    rows: list[StrikeExposure],
+) -> float:
+    """
+    Find a data-driven cutoff separating background GEX
+    from significant GEX concentrations.
+
+    The split minimizes within-group squared error in
+    log(abs(GEX)) space. This makes the result scale-invariant
+    and avoids fixed absolute thresholds or Top-N selection.
+    """
+    import math
+
+    values = sorted(
+        abs(row.net_gex_per_1pct)
+        for row in rows
+        if row.net_gex_per_1pct != 0.0
+    )
+
+    if not values:
+        return float("inf")
+
+    if len(values) == 1:
+        return values[0]
+
+    logs = [math.log(value) for value in values]
+
+    prefix_sum = [0.0]
+    prefix_sq_sum = [0.0]
+
+    for value in logs:
+        prefix_sum.append(prefix_sum[-1] + value)
+        prefix_sq_sum.append(prefix_sq_sum[-1] + value * value)
+
+    def squared_error(start: int, end: int) -> float:
+        count = end - start
+
+        if count <= 0:
+            return 0.0
+
+        total = prefix_sum[end] - prefix_sum[start]
+        total_sq = prefix_sq_sum[end] - prefix_sq_sum[start]
+
+        return total_sq - (total * total / count)
+
+    best_split = 1
+    best_error = float("inf")
+
+    for split in range(1, len(values)):
+        error = (
+            squared_error(0, split)
+            + squared_error(split, len(values))
+        )
+
+        if error < best_error:
+            best_error = error
+            best_split = split
+
+    return values[best_split]
+
+
+def _natural_strike_spacing(
+    rows: list[StrikeExposure],
+) -> float:
+    strikes = sorted({row.strike for row in rows})
+
+    gaps = [
+        right - left
+        for left, right in zip(strikes, strikes[1:])
+        if right > left
+    ]
+
+    if not gaps:
+        return float("inf")
+
+    gap_counts: dict[float, int] = {}
+
+    for gap in gaps:
+        gap_counts[gap] = gap_counts.get(gap, 0) + 1
+
+    ordered = sorted(gap_counts.items())
+
+    if len(ordered) == 1:
+        return ordered[0][0]
+
+    drops = []
+
+    for index in range(len(ordered) - 1):
+        _, current_count = ordered[index]
+        _, next_count = ordered[index + 1]
+
+        drops.append(
+            current_count / next_count
+            if next_count > 0
+            else float("inf")
+        )
+
+    split_index = max(
+        range(len(drops)),
+        key=drops.__getitem__,
+    )
+
+    return ordered[split_index][0]
+
+def build_gex_zones(
+    exposures: tuple[StrikeExposure, ...] | list[StrikeExposure],
+) -> tuple[GEXZone, ...]:
+    if not exposures:
+        return ()
+
+    expirations: dict[str, list[StrikeExposure]] = {}
+
+    for row in exposures:
+        expirations.setdefault(
+            row.expiration_code,
+            [],
+        ).append(row)
+
+    zones: list[GEXZone] = []
+
+    for expiration_code, rows in expirations.items():
+        rows = sorted(rows, key=lambda row: row.strike)
+
+        cutoff = _gex_significance_cutoff(rows)
+        spacing = _natural_strike_spacing(rows)
+
+        significant = [
+            row
+            for row in rows
+            if abs(row.net_gex_per_1pct) >= cutoff
+        ]
+
+        if not significant:
+            continue
+
+        total_abs_gex = sum(
+            abs(row.net_gex_per_1pct)
+            for row in rows
+        )
+
+        clusters: list[list[StrikeExposure]] = []
+
+        for row in significant:
+            if (
+                not clusters
+                or row.strike - clusters[-1][-1].strike > spacing
+            ):
+                clusters.append([row])
+            else:
+                clusters[-1].append(row)
+
+        for cluster in clusters:
+            peak = max(
+                cluster,
+                key=lambda row: abs(row.net_gex_per_1pct),
+            )
+
+            net_gex = sum(
+                row.net_gex_per_1pct
+                for row in cluster
+            )
+
+            cluster_abs_gex = sum(
+                abs(row.net_gex_per_1pct)
+                for row in cluster
+            )
+
+            strength = (
+                cluster_abs_gex / total_abs_gex
+                if total_abs_gex > 0.0
+                else 0.0
+            )
+
+            zones.append(
+                GEXZone(
+                    expiration_code=expiration_code,
+                    low_strike=cluster[0].strike,
+                    high_strike=cluster[-1].strike,
+                    peak_strike=peak.strike,
+                    net_gex_per_1pct=net_gex,
+                    peak_gex_per_1pct=peak.net_gex_per_1pct,
+                    strike_count=len(cluster),
+                    strength=strength,
+                )
+            )
+
+    return tuple(zones)
+
 
 
 def build_gamma_profile(
@@ -1067,7 +1258,7 @@ def build_trader_profile(
     top_n: int = 3,
 ) -> TraderProfile:
     """
-    Build combined GEX and VEX trader profile.
+    Build combined GEX, VEX and GEX-zone trader profile.
     """
 
     gamma = build_gamma_profile(
@@ -1082,9 +1273,17 @@ def build_trader_profile(
         top_n=top_n,
     )
 
+    strikes = aggregate_by_strike(
+        exposures=exposures,
+        expiration_code=gamma.expiration_code,
+    )
+
+    gex_zones = build_gex_zones(strikes)
+
     return TraderProfile(
         expiration_code=gamma.expiration_code,
         futures_settlement=gamma.futures_settlement,
         gamma=gamma,
         vanna=vanna,
+        gex_zones=gex_zones,
     )
