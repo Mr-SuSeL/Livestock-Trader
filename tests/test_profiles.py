@@ -7,6 +7,8 @@ from analysis.options_flow import (
     build_trader_profile,
 )
 
+from analysis.options_flow import build_relative_wall, find_nearest_walls
+
 
 def make_exposure(
     strike: float,
@@ -128,3 +130,63 @@ def test_profiles_reject_invalid_top_n(exposures, builder):
             "OCT26",
             top_n=0,
         )
+
+
+def test_relative_wall_above_settlement():
+    wall = build_relative_wall(
+        strike=84.0,
+        exposure=1500.0,
+        futures_settlement=80.0,
+    )
+
+    assert wall.strike == 84.0
+    assert wall.exposure == 1500.0
+    assert wall.distance_points == pytest.approx(4.0)
+    assert wall.distance_percent == pytest.approx(5.0)
+
+
+def test_relative_wall_below_settlement():
+    wall = build_relative_wall(
+        strike=76.0,
+        exposure=-1000.0,
+        futures_settlement=80.0,
+    )
+
+    assert wall.distance_points == pytest.approx(-4.0)
+    assert wall.distance_percent == pytest.approx(-5.0)
+
+
+def test_find_nearest_walls():
+    walls = (
+        build_relative_wall(76.0, 100.0, 80.0),
+        build_relative_wall(79.0, 200.0, 80.0),
+        build_relative_wall(81.0, 300.0, 80.0),
+        build_relative_wall(84.0, 400.0, 80.0),
+    )
+
+    below, above = find_nearest_walls(
+        walls=walls,
+        futures_settlement=80.0,
+    )
+
+    assert below is not None
+    assert above is not None
+
+    assert below.strike == 79.0
+    assert above.strike == 81.0
+
+
+def test_find_nearest_walls_handles_missing_side():
+    walls = (
+        build_relative_wall(81.0, 300.0, 80.0),
+        build_relative_wall(84.0, 400.0, 80.0),
+    )
+
+    below, above = find_nearest_walls(
+        walls=walls,
+        futures_settlement=80.0,
+    )
+
+    assert below is None
+    assert above is not None
+    assert above.strike == 81.0

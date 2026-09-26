@@ -545,6 +545,82 @@ class GammaProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class RelativeWall:
+    """
+    Exposure wall positioned relative to futures settlement.
+    """
+
+    strike: float
+    exposure: float
+    distance_points: float
+    distance_percent: float
+
+
+
+def build_relative_wall(
+    strike: float,
+    exposure: float,
+    futures_settlement: float,
+) -> RelativeWall:
+    """
+    Position an exposure wall relative to futures settlement.
+    """
+
+    if futures_settlement <= 0:
+        raise ValueError(
+            "futures_settlement must be greater than zero."
+        )
+
+    distance_points = strike - futures_settlement
+
+    return RelativeWall(
+        strike=strike,
+        exposure=exposure,
+        distance_points=distance_points,
+        distance_percent=(
+            distance_points
+            / futures_settlement
+            * 100.0
+        ),
+    )
+
+
+def find_nearest_walls(
+    walls: tuple[RelativeWall, ...],
+    futures_settlement: float,
+) -> tuple[RelativeWall | None, RelativeWall | None]:
+    """
+    Find nearest exposure walls below and above futures settlement.
+    """
+
+    below = [
+        wall
+        for wall in walls
+        if wall.strike < futures_settlement
+    ]
+
+    above = [
+        wall
+        for wall in walls
+        if wall.strike > futures_settlement
+    ]
+
+    nearest_below = max(
+        below,
+        key=lambda wall: wall.strike,
+        default=None,
+    )
+
+    nearest_above = min(
+        above,
+        key=lambda wall: wall.strike,
+        default=None,
+    )
+
+    return nearest_below, nearest_above
+
+
+@dataclass(frozen=True, slots=True)
 class TraderProfile:
     """
     Combined options positioning profile for one expiration.
