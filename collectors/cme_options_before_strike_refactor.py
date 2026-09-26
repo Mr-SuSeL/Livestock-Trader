@@ -138,7 +138,8 @@ ROW_TAIL_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -185,7 +186,8 @@ NEW_ROW_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -199,8 +201,8 @@ ACTIVE_ROW_PATTERN = re.compile(
     \s[+-]\s
     (?P<volume>\d+|----)
     \s+
-    (?P<open_interest>\d+|----)
-    \s*
+    (?P<open_interest>\d+)
+    \s+
     (?P<change>[+-]?\d+|\+?NEW|UNCH|-----)
     \s+
     (?P<trades>\d+|UNCH)
@@ -209,7 +211,8 @@ ACTIVE_ROW_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -223,8 +226,8 @@ CAB_ROW_PATTERN = re.compile(
     \s+
     (?P<volume>\d+|----)
     \s+
-    (?P<open_interest>\d+|----)
-    \s*
+    (?P<open_interest>\d+)
+    \s+
     (?P<change>[+-]?\d+|UNCH|[+-]?----|-----)
     \s+
     (?P<trades>\d+|UNCH)
@@ -233,7 +236,8 @@ CAB_ROW_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -256,7 +260,8 @@ SIGNED_UNCH_ROW_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -279,7 +284,8 @@ NO_CHANGE_ROW_PATTERN = re.compile(
         ----
         (?P<strike>\d+)
         |
-        (?P<exercise_tail>\d{4,7})
+        (?P<exercises>\d{1,3})
+        (?P<exercise_strike>\d{3})
     )
     $
     """,
@@ -518,7 +524,6 @@ def normalize_series_label(
 
 def parse_volume_oi_row(
     line: str,
-    exercise_strike_digits: int = 3,
 ) -> tuple[int, int, int, str] | None:
     """
     Parse volume, open interest and raw strike from one CME option row.
@@ -556,17 +561,10 @@ def parse_volume_oi_row(
             else int(open_interest_text)
         )
 
-        strike_text = match.group("strike")
-
-        if strike_text is None:
-            exercise_tail = match.group("exercise_tail")
-
-            if len(exercise_tail) <= exercise_strike_digits:
-                return None
-
-            strike_text = exercise_tail[
-                -exercise_strike_digits:
-            ]
+        strike_text = (
+            match.group("strike")
+            or match.group("exercise_strike")
+        )
 
         return (
             int(strike_text),
@@ -620,7 +618,6 @@ def _parse_option_text(
     text: str,
     option_type: str,
     strike_scale: float,
-    exercise_strike_digits: int,
 ) -> list[CMEOptionPoint]:
     """
     Parse option series, expiration, settlement, delta, volume, open interest and strikes.
@@ -711,10 +708,7 @@ def _parse_option_text(
 
             continue
 
-        parsed_row = parse_volume_oi_row(
-            line,
-            exercise_strike_digits=exercise_strike_digits,
-        )
+        parsed_row = parse_volume_oi_row(line)
 
         if parsed_row is None:
             continue
@@ -812,14 +806,12 @@ def collect_options_chain(
         text=call_text,
         option_type="CALL",
         strike_scale=instrument.option_strike_scale,
-        exercise_strike_digits=instrument.option_strike_digits,
     )
 
     puts = _parse_option_text(
         text=put_text,
         option_type="PUT",
         strike_scale=instrument.option_strike_scale,
-        exercise_strike_digits=instrument.option_strike_digits,
     )
 
     calls = _resolve_underlying_settlements(

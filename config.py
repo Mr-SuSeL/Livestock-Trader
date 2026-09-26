@@ -42,6 +42,7 @@ class InstrumentConfig:
     price_unit: str
 
     option_strike_scale: float
+    option_strike_digits: int
 
     contract_months: tuple[int, ...]
 
@@ -89,6 +90,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         point_value=400.0,
         price_unit="US cents per pound",
         option_strike_scale=10.0,
+        option_strike_digits=3,
         contract_months=(
             2,
             4,
@@ -118,6 +120,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         point_value=400.0,
         price_unit="US cents per pound",
         option_strike_scale=10.0,
+        option_strike_digits=4,
         contract_months=(
             2,
             4,
@@ -144,6 +147,7 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
         point_value=500.0,
         price_unit="US cents per pound",
         option_strike_scale=10.0,
+        option_strike_digits=4,
         contract_months=(
             1,
             3,
