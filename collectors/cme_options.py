@@ -8,7 +8,7 @@ their extracted text into normalized option-contract records.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from io import BytesIO
 
@@ -16,6 +16,7 @@ import requests
 from pypdf import PdfReader
 
 from config import InstrumentConfig
+
 
 
 SOURCE_NAME = "CME"
@@ -791,6 +792,10 @@ def collect_options_chain(
         call_text
     )
 
+    settlements = _section_futures_settlements(
+        call_text
+    )
+
     calls = _parse_option_text(
         text=call_text,
         option_type="CALL",
@@ -801,6 +806,18 @@ def collect_options_chain(
         text=put_text,
         option_type="PUT",
         strike_scale=instrument.option_strike_scale,
+    )
+
+    calls = _resolve_underlying_settlements(
+        points=calls,
+        settlements=settlements,
+        instrument=instrument,
+    )
+
+    puts = _resolve_underlying_settlements(
+        points=puts,
+        settlements=settlements,
+        instrument=instrument,
     )
 
     points = tuple(
@@ -882,3 +899,105 @@ def print_options_sample(
 
     print()
     print(f"Parsed records: {len(points):,}")
+
+
+
+
+def _underlying_contract_code(
+    expiration_code: str,
+    instrument: InstrumentConfig,
+) -> str:
+
+    option_month = datetime.strptime(
+        expiration_code[:3],
+        "%b",
+    ).month
+
+    option_year = 2000 + int(
+        expiration_code[-2:]
+    )
+
+    months = sorted(instrument.contract_months)
+
+    if option_month in months:
+        futures_month = option_month
+        futures_year = option_year
+    else:
+        later = [
+            month
+            for month in months
+            if month > option_month
+        ]
+
+        if later:
+            futures_month = later[0]
+            futures_year = option_year
+        else:
+            futures_month = months[0]
+            futures_year = option_year + 1
+
+    month_code = datetime(
+        futures_year,
+        futures_month,
+        1,
+    ).strftime("%b").upper()
+
+    return f"{month_code}{futures_year % 100:02d}"
+
+def _section_futures_settlements(
+    text: str,
+) -> dict[str, float]:
+
+    settlements: dict[str, float] = {}
+
+    for raw_line in text.splitlines():
+        match = SECTION_HEADER_PATTERN.search(
+            raw_line.strip()
+        )
+
+        if match is None:
+            continue
+
+        settlement = float(
+            match.group("settlement")
+        )
+
+        if settlement <= 0:
+            continue
+
+        settlements[
+            match.group("expiration")
+        ] = settlement
+
+    return settlements
+
+def _resolve_underlying_settlements(
+    points: list[CMEOptionPoint],
+    settlements: dict[str, float],
+    instrument: InstrumentConfig,
+) -> list[CMEOptionPoint]:
+    """
+    Assign the settlementing futures contract.
+    """
+
+    resolved: list[CMEOptionPoint] = []
+
+    for point in points:
+        underlying_code = _underlying_contract_code(
+            point.expiration_code,
+            instrument,
+        )
+
+        futures_settlement = settlements.get(
+            underlying_code
+        )
+
+        resolved.append(
+            replace(
+                point,
+                futures_settlement=futures_settlement,
+            )
+        )
+
+    return resolved
+

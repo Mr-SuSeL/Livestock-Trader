@@ -53,6 +53,11 @@ BULLETINS: dict[str, BulletinDefinition] = {
         call_file="Section15_Live_Cattle_Call_Options.pdf",
         put_file="Section16_Live_Cattle_Put_Options.pdf",
     ),
+    "feeder_cattle": BulletinDefinition(
+        name="Feeder Cattle",
+        call_file="Section17_Feeder_Cattle_Call_Options.pdf",
+        put_file="Section18_Feeder_Cattle_Put_Options.pdf",
+    ),
 }
 
 
@@ -128,7 +133,7 @@ CAB_ROW_PATTERN = re.compile(
     \s+
     (?P<open_interest>\d+)
     \s+
-    (?P<change>[+-]?\d+|UNCH|----|-----)
+    (?P<change>[+-]?\d+|UNCH|\+?----|-----)
     \s+
     (?P<trades>\d+|UNCH)
     .*?

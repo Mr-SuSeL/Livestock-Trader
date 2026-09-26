@@ -17,6 +17,16 @@ from collectors.cme_options import (
 
 from config import InstrumentConfig
 
+from collectors.treasury_rates import (
+    TreasuryCurve,
+    rate_for_maturity,
+)
+
+from models.black76 import (
+    implied_volatility,
+    option_gamma,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class OptionExposure:
@@ -33,6 +43,7 @@ class OptionExposure:
 
     strike: float
     futures_settlement: float | None
+    option_settlement: float | None
 
     volume: int
     open_interest: int
@@ -40,6 +51,13 @@ class OptionExposure:
 
     delta_exposure: float | None
     time_to_expiry: float | None
+
+    risk_free_rate: float | None
+    implied_volatility: float | None
+    gamma: float | None
+    gamma_exposure: float | None
+    gex_per_1pct: float | None
+
 
 
 def calculate_delta_exposure(
@@ -91,9 +109,39 @@ def calculate_time_to_expiry(
     return days / 365.0
 
 
+def calculate_gex_per_1pct(
+    point: CMEOptionPoint,
+    gamma: float,
+    instrument: InstrumentConfig,
+) -> float:
+    """
+    Estimate signed gamma exposure for a 1% futures-price move.
+    """
+
+    if point.futures_settlement is None:
+        raise ValueError(
+            "futures settlement is required."
+        )
+
+    direction = (
+        1.0
+        if point.option_type == "CALL"
+        else -1.0
+    )
+
+    return (
+        direction
+        * gamma
+        * point.open_interest
+        * instrument.contract_size
+        * point.futures_settlement
+    )
+
+
 def build_option_exposures(
     chain: CMEOptionsChain,
     instrument: InstrumentConfig,
+    curve: TreasuryCurve,
     series: str = "STANDARD",
 ) -> tuple[OptionExposure, ...]:
     """
@@ -116,6 +164,11 @@ def build_option_exposures(
         )
 
         time_to_expiry = None
+        risk_free_rate = None
+        volatility = None
+        gamma = None
+        gamma_exposure = None
+        gex_per_1pct = None
 
         if expiration_date is not None:
             time_to_expiry = calculate_time_to_expiry(
@@ -125,12 +178,54 @@ def build_option_exposures(
                 expiration_date=expiration_date,
             )
 
+        can_price = (
+            time_to_expiry is not None
+            and point.futures_settlement is not None
+            and point.futures_settlement > 0
+            and point.option_settlement is not None
+            and point.option_settlement > 0
+        )
+
+        if can_price:
+            risk_free_rate = rate_for_maturity(
+                curve=curve,
+                maturity_years=time_to_expiry,
+            )
+
+            volatility = implied_volatility(
+                market_price=point.option_settlement,
+                futures_price=point.futures_settlement,
+                strike=point.strike,
+                time_to_expiry=time_to_expiry,
+                risk_free_rate=risk_free_rate,
+                option_type=point.option_type,
+            )
+
+            if volatility is not None:
+                gamma = option_gamma(
+                    futures_price=point.futures_settlement,
+                    strike=point.strike,
+                    time_to_expiry=time_to_expiry,
+                    volatility=volatility,
+                    risk_free_rate=risk_free_rate,
+                )
+
+                gamma_exposure = (
+                    gamma
+                    * point.open_interest
+                    * instrument.contract_size
+                )
+
+                gex_per_1pct = calculate_gex_per_1pct(
+                    point=point,
+                    gamma=gamma,
+                    instrument=instrument,
+                )
+
         exposures.append(
             OptionExposure(
                 series=point.series,
-                expiration_code=(
-                    point.expiration_code
-                ),
+                expiration_code=point.expiration_code,
                 expiration_date=expiration_date,
                 bulletin_date=(
                     chain.metadata.bulletin_date
@@ -142,6 +237,9 @@ def build_option_exposures(
                 futures_settlement=(
                     point.futures_settlement
                 ),
+                option_settlement=(
+                    point.option_settlement
+                ),
 
                 volume=point.volume,
                 open_interest=point.open_interest,
@@ -152,6 +250,12 @@ def build_option_exposures(
                     instrument=instrument,
                 ),
                 time_to_expiry=time_to_expiry,
+
+                risk_free_rate=risk_free_rate,
+                implied_volatility=volatility,
+                gamma=gamma,
+                gamma_exposure=gamma_exposure,
+                gex_per_1pct=gex_per_1pct,
             )
         )
 
