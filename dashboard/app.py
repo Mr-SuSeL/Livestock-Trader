@@ -1,9 +1,11 @@
 from nicegui import run, ui
 
 from analysis.options_flow import (
+    aggregate_by_strike,
     build_relative_wall,
     find_nearest_walls,
 )
+
 from config import INSTRUMENTS
 from dashboard.state import DashboardState
 
@@ -188,6 +190,48 @@ async def refresh_profile():
 
         profile = state.build_profile()
 
+        strikes = aggregate_by_strike(
+            exposures=state.exposures,
+            expiration_code=profile.expiration_code,
+        )
+
+        strike_labels = [
+            f"{row.strike:.2f}"
+            for row in strikes
+        ]
+
+        exposure_chart.options["xAxis"][0]["data"] = strike_labels
+        exposure_chart.options["xAxis"][1]["data"] = strike_labels
+
+        exposure_chart.options["series"][0]["data"] = [
+            row.call_gex_per_1pct
+            for row in strikes
+        ]
+        exposure_chart.options["series"][1]["data"] = [
+            row.put_gex_per_1pct
+            for row in strikes
+        ]
+        exposure_chart.options["series"][2]["data"] = [
+            row.net_gex_per_1pct
+            for row in strikes
+        ]
+
+        exposure_chart.options["series"][3]["data"] = [
+            row.call_vex_per_1pct_iv
+            for row in strikes
+        ]
+        exposure_chart.options["series"][4]["data"] = [
+            row.put_vex_per_1pct_iv
+            for row in strikes
+        ]
+        exposure_chart.options["series"][5]["data"] = [
+            row.net_vex_per_1pct_iv
+            for row in strikes
+        ]
+
+        exposure_chart.update()
+
+
         futures_value.set_text(
             f"{profile.futures_settlement:.2f}"
             if profile.futures_settlement is not None
@@ -369,7 +413,7 @@ async def walls_changed():
         await refresh_profile()
 
 
-ui.page_title("CME Options Lab")
+ui.page_title("Livestock Trader")
 
 ui.add_css("""
 body {
@@ -396,7 +440,7 @@ with ui.column().classes(
     ):
         with ui.column().classes("gap-0"):
             ui.label(
-                "CME OPTIONS LAB"
+                "Livestock Trader"
             ).classes(
                 "text-3xl font-bold"
             )
@@ -624,6 +668,188 @@ with ui.column().classes(
         with ui.tab_panel(gex_vex_tab):
 
             ui.label(
+                "GEX / VEX"
+            ).classes("text-2xl font-bold")
+
+            ui.label(
+                "Shared strike range and zoom"
+            ).classes("text-gray-500")
+
+            exposure_chart = ui.echart(
+                {
+                    "animation": False,
+
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {
+                            "type": "cross",
+                        },
+                    },
+
+                    "axisPointer": {
+                        "link": [
+                            {
+                                "xAxisIndex": [0, 1],
+                            }
+                        ],
+                    },
+
+                    "legend": [
+                        {
+                            "data": [
+                                "Call GEX",
+                                "Put GEX",
+                                "Net GEX",
+                            ],
+                            "top": 5,
+                        },
+                        {
+                            "data": [
+                                "Call VEX",
+                                "Put VEX",
+                                "Net VEX",
+                            ],
+                            "top": "51%",
+                        },
+                    ],
+
+                    "grid": [
+                        {
+                            "left": 90,
+                            "right": 30,
+                            "top": 45,
+                            "height": "34%",
+                        },
+                        {
+                            "left": 90,
+                            "right": 30,
+                            "top": "56%",
+                            "height": "30%",
+                        },
+                    ],
+
+                    "xAxis": [
+                        {
+                            "type": "category",
+                            "gridIndex": 0,
+                            "data": [],
+                            "axisLabel": {
+                                "show": False,
+                            },
+                        },
+                        {
+                            "type": "category",
+                            "gridIndex": 1,
+                            "name": "Strike",
+                            "data": [],
+                            "axisLabel": {
+                                "rotate": 45,
+                            },
+                        },
+                    ],
+
+                    "yAxis": [
+                        {
+                            "type": "value",
+                            "gridIndex": 0,
+                            "name": "GEX / 1%",
+                        },
+                        {
+                            "type": "value",
+                            "gridIndex": 1,
+                            "name": "VEX / 1% IV",
+                        },
+                    ],
+
+                    "dataZoom": [
+                        {
+                            "type": "inside",
+                            "xAxisIndex": [0, 1],
+                        },
+                        {
+                            "type": "slider",
+                            "xAxisIndex": [0, 1],
+                            "bottom": 5,
+                        },
+                    ],
+
+                    "series": [
+                        {
+                            "name": "Call GEX",
+                            "type": "bar",
+                            "xAxisIndex": 0,
+                            "yAxisIndex": 0,
+                            "data": [],
+                            "itemStyle": {
+                                "color": "#2563eb",
+                            },
+                        },
+                        {
+                            "name": "Put GEX",
+                            "type": "bar",
+                            "xAxisIndex": 0,
+                            "yAxisIndex": 0,
+                            "data": [],
+                            "itemStyle": {
+                                "color": "#f59e0b",
+                            },
+                        },
+                        {
+                            "name": "Net GEX",
+                            "type": "line",
+                            "xAxisIndex": 0,
+                            "yAxisIndex": 0,
+                            "data": [],
+                            "symbol": "none",
+                            "lineStyle": {
+                                "color": "#94a3b8",
+                                "width": 1.25,
+                                "type": "dashed",
+                                "opacity": 0.7,
+                            },
+                        },
+
+                        {
+                            "name": "Call VEX",
+                            "type": "bar",
+                            "xAxisIndex": 1,
+                            "yAxisIndex": 1,
+                            "data": [],
+                            "itemStyle": {
+                                "color": "#7c3aed",
+                            },
+                        },
+                        {
+                            "name": "Put VEX",
+                            "type": "bar",
+                            "xAxisIndex": 1,
+                            "yAxisIndex": 1,
+                            "data": [],
+                            "itemStyle": {
+                                "color": "#06b6d4",
+                            },
+                        },
+                        {
+                            "name": "Net VEX",
+                            "type": "line",
+                            "xAxisIndex": 1,
+                            "yAxisIndex": 1,
+                            "data": [],
+                            "symbol": "none",
+                            "lineStyle": {
+                                "color": "#94a3b8",
+                                "width": 1.25,
+                                "type": "dashed",
+                                "opacity": 0.7,
+                            },
+                        },
+                    ],
+                }
+            ).classes("w-full h-[700px]")
+
+            ui.separator().classes("my-6")
+            
+            ui.label(
                 "Gamma Walls"
             ).classes("text-2xl font-bold")
 
@@ -741,6 +967,6 @@ with ui.column().classes(
 
 
 ui.run(
-    title="CME Options Lab",
+    title="Livestock Trader",
     reload=False,
 )
