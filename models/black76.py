@@ -193,6 +193,40 @@ def option_gamma(
     )
 
 
+def option_vanna(
+    futures_price: float,
+    strike: float,
+    time_to_expiry: float,
+    volatility: float,
+    risk_free_rate: float,
+) -> float:
+    """
+    Calculate Black-76 vanna with respect to futures price
+    and volatility.
+    """
+
+    d1, d2 = d1_d2(
+        futures_price=futures_price,
+        strike=strike,
+        time_to_expiry=time_to_expiry,
+        volatility=volatility,
+    )
+
+    discount = math.exp(
+        -risk_free_rate
+        * time_to_expiry
+    )
+
+    return (
+        -discount
+        * _normal_pdf(d1)
+        * d2
+        / volatility
+    )
+
+
+
+
 def option_price(
     futures_price: float,
     strike: float,

@@ -25,6 +25,7 @@ from collectors.treasury_rates import (
 from models.black76 import (
     implied_volatility,
     option_gamma,
+    option_vanna,
 )
 
 
@@ -57,6 +58,9 @@ class OptionExposure:
     gamma: float | None
     gamma_exposure: float | None
     gex_per_1pct: float | None
+
+    vanna: float | None
+    vex_per_1pct_iv: float | None
 
 
 
@@ -142,6 +146,38 @@ def calculate_gex_per_1pct(
     )
 
 
+def calculate_vex_per_1pct_iv(
+    point: CMEOptionPoint,
+    vanna: float,
+    instrument: InstrumentConfig,
+) -> float:
+    """
+    Estimate signed vanna exposure for a 1 percentage-point IV move.
+    """
+
+    if point.futures_settlement is None:
+        raise ValueError(
+            "futures settlement is required."
+        )
+
+    direction = (
+        1.0
+        if point.option_type == "CALL"
+        else -1.0
+    )
+
+    iv_move = 0.01
+
+    return (
+        direction
+        * vanna
+        * point.open_interest
+        * instrument.point_value
+        * point.futures_settlement
+        * iv_move
+    )
+
+
 def build_option_exposures(
     chain: CMEOptionsChain,
     instrument: InstrumentConfig,
@@ -173,6 +209,8 @@ def build_option_exposures(
         gamma = None
         gamma_exposure = None
         gex_per_1pct = None
+        vanna = None
+        vex_per_1pct_iv = None
 
         if expiration_date is not None:
             time_to_expiry = calculate_time_to_expiry(
@@ -212,6 +250,20 @@ def build_option_exposures(
                     time_to_expiry=time_to_expiry,
                     volatility=volatility,
                     risk_free_rate=risk_free_rate,
+                )
+
+                vanna = option_vanna(
+                    futures_price=point.futures_settlement,
+                    strike=point.strike,
+                    time_to_expiry=time_to_expiry,
+                    volatility=volatility,
+                    risk_free_rate=risk_free_rate,
+                )
+
+                vex_per_1pct_iv = calculate_vex_per_1pct_iv(
+                    point=point,
+                    vanna=vanna,
+                    instrument=instrument,
                 )
 
                 gamma_exposure = (
@@ -260,6 +312,8 @@ def build_option_exposures(
                 gamma=gamma,
                 gamma_exposure=gamma_exposure,
                 gex_per_1pct=gex_per_1pct,
+                vanna=vanna,
+                vex_per_1pct_iv=vex_per_1pct_iv,
             )
         )
 
@@ -296,6 +350,11 @@ class ExpirationExposure:
     call_gex_per_1pct: float
     put_gex_per_1pct: float
     net_gex_per_1pct: float
+
+    call_vex_per_1pct_iv: float
+    put_vex_per_1pct_iv: float
+    net_vex_per_1pct_iv: float
+
 
 
 def aggregate_by_expiration(
@@ -351,6 +410,16 @@ def aggregate_by_expiration(
 
         put_gex_per_1pct = sum(
             point.gex_per_1pct or 0.0
+            for point in puts
+        )
+
+        call_vex_per_1pct_iv = sum(
+            point.vex_per_1pct_iv or 0.0
+            for point in calls
+        )
+
+        put_vex_per_1pct_iv = sum(
+            point.vex_per_1pct_iv or 0.0
             for point in puts
         )
 
@@ -411,6 +480,13 @@ def aggregate_by_expiration(
                     call_gex_per_1pct
                     + put_gex_per_1pct
                 ),
+
+                call_vex_per_1pct_iv=call_vex_per_1pct_iv,
+                put_vex_per_1pct_iv=put_vex_per_1pct_iv,
+                net_vex_per_1pct_iv=(
+                    call_vex_per_1pct_iv
+                    + put_vex_per_1pct_iv
+                ),
             )
         )
 
@@ -424,6 +500,32 @@ class GammaWall:
 
     strike: float
     gex_per_1pct: float
+
+
+@dataclass(frozen=True, slots=True)
+class VannaWall:
+    """
+    One significant vanna-exposure level.
+    """
+
+    strike: float
+    vex_per_1pct_iv: float
+
+
+@dataclass(frozen=True, slots=True)
+class VannaProfile:
+    """
+    Vanna-exposure profile for one expiration.
+    """
+
+    expiration_code: str
+    futures_settlement: float | None
+    total_net_vex_per_1pct_iv: float
+
+    top_call_walls: tuple[VannaWall, ...]
+    top_put_walls: tuple[VannaWall, ...]
+    top_positive_net_walls: tuple[VannaWall, ...]
+    top_negative_net_walls: tuple[VannaWall, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +568,11 @@ class StrikeExposure:
     call_gex_per_1pct: float
     put_gex_per_1pct: float
     net_gex_per_1pct: float
+
+    call_vex_per_1pct_iv: float
+    put_vex_per_1pct_iv: float
+    net_vex_per_1pct_iv: float
+
 
     missing_delta_open_interest: int
 
@@ -554,6 +661,18 @@ def aggregate_by_strike(
             if point.gex_per_1pct is not None
         )
 
+        call_vex_per_1pct_iv = sum(
+            point.vex_per_1pct_iv
+            for point in calls
+            if point.vex_per_1pct_iv is not None
+        )
+
+        put_vex_per_1pct_iv = sum(
+            point.vex_per_1pct_iv
+            for point in puts
+            if point.vex_per_1pct_iv is not None
+        )
+
         results.append(
             StrikeExposure(
                 expiration_code=(
@@ -600,6 +719,16 @@ def aggregate_by_strike(
                 net_gex_per_1pct=(
                     call_gex_per_1pct
                     + put_gex_per_1pct
+                ),
+                call_vex_per_1pct_iv=(
+                    call_vex_per_1pct_iv
+                ),
+                put_vex_per_1pct_iv=(
+                    put_vex_per_1pct_iv
+                ),
+                net_vex_per_1pct_iv=(
+                    call_vex_per_1pct_iv
+                    + put_vex_per_1pct_iv
                 ),
 
                 missing_delta_open_interest=sum(
@@ -736,3 +865,95 @@ def available_expirations(
         )
     )
 
+def build_vanna_profile(
+    exposures: tuple[OptionExposure, ...],
+    expiration_code: str,
+    top_n: int = 3,
+) -> VannaProfile:
+    """
+    Build vanna-wall profile for one expiration.
+    """
+
+    if top_n <= 0:
+        raise ValueError("top_n must be greater than zero.")
+
+    normalized_expiration = expiration_code.strip().upper()
+
+    strikes = aggregate_by_strike(
+        exposures=exposures,
+        expiration_code=normalized_expiration,
+    )
+
+    expiration_rows = [
+        point
+        for point in exposures
+        if point.expiration_code == normalized_expiration
+    ]
+
+    futures_settlement = next(
+        (
+            point.futures_settlement
+            for point in expiration_rows
+            if point.futures_settlement is not None
+        ),
+        None,
+    )
+
+    top_call = sorted(
+        strikes,
+        key=lambda x: x.call_vex_per_1pct_iv,
+        reverse=True,
+    )[:top_n]
+
+    top_put = sorted(
+        strikes,
+        key=lambda x: x.put_vex_per_1pct_iv,
+    )[:top_n]
+
+    top_positive = sorted(
+        strikes,
+        key=lambda x: x.net_vex_per_1pct_iv,
+        reverse=True,
+    )[:top_n]
+
+    top_negative = sorted(
+        strikes,
+        key=lambda x: x.net_vex_per_1pct_iv,
+    )[:top_n]
+
+    return VannaProfile(
+        expiration_code=normalized_expiration,
+        futures_settlement=futures_settlement,
+        total_net_vex_per_1pct_iv=sum(
+            point.net_vex_per_1pct_iv
+            for point in strikes
+        ),
+        top_call_walls=tuple(
+            VannaWall(
+                strike=point.strike,
+                vex_per_1pct_iv=point.call_vex_per_1pct_iv,
+            )
+            for point in top_call
+        ),
+        top_put_walls=tuple(
+            VannaWall(
+                strike=point.strike,
+                vex_per_1pct_iv=point.put_vex_per_1pct_iv,
+            )
+            for point in top_put
+        ),
+        top_positive_net_walls=tuple(
+            VannaWall(
+                strike=point.strike,
+                vex_per_1pct_iv=point.net_vex_per_1pct_iv,
+            )
+            for point in top_positive
+        ),
+        top_negative_net_walls=tuple(
+            VannaWall(
+                strike=point.strike,
+                vex_per_1pct_iv=point.net_vex_per_1pct_iv,
+            )
+            for point in top_negative
+        ),
+    )
