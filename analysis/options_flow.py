@@ -292,6 +292,10 @@ class ExpirationExposure:
     call_delta_exposure: float
     put_delta_exposure: float
     net_delta_exposure: float
+    
+    call_gex_per_1pct: float
+    put_gex_per_1pct: float
+    net_gex_per_1pct: float
 
 
 def aggregate_by_expiration(
@@ -337,6 +341,16 @@ def aggregate_by_expiration(
 
         put_delta_exposure = sum(
             point.delta_exposure or 0.0
+            for point in puts
+        )
+
+        call_gex_per_1pct = sum(
+            point.gex_per_1pct or 0.0
+            for point in calls
+        )
+
+        put_gex_per_1pct = sum(
+            point.gex_per_1pct or 0.0
             for point in puts
         )
 
@@ -390,6 +404,13 @@ def aggregate_by_expiration(
                     call_delta_exposure
                     + put_delta_exposure
                 ),
+
+                call_gex_per_1pct=call_gex_per_1pct,
+                put_gex_per_1pct=put_gex_per_1pct,
+                net_gex_per_1pct=(
+                    call_gex_per_1pct
+                    + put_gex_per_1pct
+                ),
             )
         )
 
@@ -414,6 +435,10 @@ class StrikeExposure:
     call_delta_exposure: float
     put_delta_exposure: float
     net_delta_exposure: float
+
+    call_gex_per_1pct: float
+    put_gex_per_1pct: float
+    net_gex_per_1pct: float
 
     missing_delta_open_interest: int
 
@@ -490,6 +515,18 @@ def aggregate_by_strike(
             if point.delta_exposure is not None
         )
 
+        call_gex_per_1pct = sum(
+            point.gex_per_1pct
+            for point in calls
+            if point.gex_per_1pct is not None
+        )
+
+        put_gex_per_1pct = sum(
+            point.gex_per_1pct
+            for point in puts
+            if point.gex_per_1pct is not None
+        )
+
         results.append(
             StrikeExposure(
                 expiration_code=(
@@ -526,6 +563,16 @@ def aggregate_by_strike(
                 net_delta_exposure=(
                     call_delta_exposure
                     + put_delta_exposure
+                ),
+                call_gex_per_1pct=(
+                    call_gex_per_1pct
+                ),
+                put_gex_per_1pct=(
+                    put_gex_per_1pct
+                ),
+                net_gex_per_1pct=(
+                    call_gex_per_1pct
+                    + put_gex_per_1pct
                 ),
 
                 missing_delta_open_interest=sum(
