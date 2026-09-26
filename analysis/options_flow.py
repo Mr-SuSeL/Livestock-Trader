@@ -417,6 +417,33 @@ def aggregate_by_expiration(
     return tuple(results)
 
 @dataclass(frozen=True, slots=True)
+class GammaWall:
+    """
+    One significant gamma-exposure level.
+    """
+
+    strike: float
+    gex_per_1pct: float
+
+
+@dataclass(frozen=True, slots=True)
+class GammaProfile:
+    """
+    Gamma-exposure profile for one expiration.
+    """
+
+    expiration_code: str
+    futures_settlement: float | None
+    total_net_gex_per_1pct: float
+
+    top_call_walls: tuple[GammaWall, ...]
+    top_put_walls: tuple[GammaWall, ...]
+    top_positive_net_walls: tuple[GammaWall, ...]
+    top_negative_net_walls: tuple[GammaWall, ...]
+
+
+
+@dataclass(frozen=True, slots=True)
 class StrikeExposure:
     """
     Aggregated option positioning for one strike.
@@ -584,3 +611,128 @@ def aggregate_by_strike(
         )
 
     return tuple(results)
+
+
+
+def build_gamma_profile(
+    exposures: tuple[OptionExposure, ...],
+    expiration_code: str,
+    top_n: int = 3,
+) -> GammaProfile:
+    """
+    Build gamma-wall profile for one expiration.
+    """
+
+    if top_n <= 0:
+        raise ValueError("top_n must be greater than zero.")
+
+    normalized_expiration = expiration_code.strip().upper()
+
+    strikes = aggregate_by_strike(
+        exposures=exposures,
+        expiration_code=normalized_expiration,
+    )
+
+    expiration_rows = [
+        point
+        for point in exposures
+        if point.expiration_code == normalized_expiration
+    ]
+
+    futures_settlement = next(
+        (
+            point.futures_settlement
+            for point in expiration_rows
+            if point.futures_settlement is not None
+        ),
+        None,
+    )
+
+    top_call = sorted(
+        strikes,
+        key=lambda x: x.call_gex_per_1pct,
+        reverse=True,
+    )[:top_n]
+
+    top_put = sorted(
+        strikes,
+        key=lambda x: x.put_gex_per_1pct,
+    )[:top_n]
+
+    top_positive = sorted(
+        strikes,
+        key=lambda x: x.net_gex_per_1pct,
+        reverse=True,
+    )[:top_n]
+
+    top_negative = sorted(
+        strikes,
+        key=lambda x: x.net_gex_per_1pct,
+    )[:top_n]
+
+    return GammaProfile(
+        expiration_code=normalized_expiration,
+        futures_settlement=futures_settlement,
+        total_net_gex_per_1pct=sum(
+            point.net_gex_per_1pct
+            for point in strikes
+        ),
+        top_call_walls=tuple(
+            GammaWall(
+                strike=point.strike,
+                gex_per_1pct=point.call_gex_per_1pct,
+            )
+            for point in top_call
+        ),
+        top_put_walls=tuple(
+            GammaWall(
+                strike=point.strike,
+                gex_per_1pct=point.put_gex_per_1pct,
+            )
+            for point in top_put
+        ),
+        top_positive_net_walls=tuple(
+            GammaWall(
+                strike=point.strike,
+                gex_per_1pct=point.net_gex_per_1pct,
+            )
+            for point in top_positive
+        ),
+        top_negative_net_walls=tuple(
+            GammaWall(
+                strike=point.strike,
+                gex_per_1pct=point.net_gex_per_1pct,
+            )
+            for point in top_negative
+        ),
+    )
+
+
+def available_expirations(
+    chain: CMEOptionsChain,
+    series: str = "STANDARD",
+) -> tuple[str, ...]:
+    """
+    Return available expirations in chronological order.
+    """
+
+    normalized_series = series.strip().upper()
+
+    available_codes = {
+        point.expiration_code
+        for point in chain.points
+        if (
+            point.series == normalized_series
+            and point.expiration_code
+            in chain.metadata.option_expirations
+        )
+    }
+
+
+    return tuple(
+        sorted(
+            available_codes,
+            key=lambda code: chain.metadata.option_expirations[code],
+        )
+    )
+
