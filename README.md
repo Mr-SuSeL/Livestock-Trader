@@ -1,10 +1,10 @@
 # Livestock Trader
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=Color=white](https://www.python.org/)
-[![Market](https://img.shields.io/badge/Market-CME-00529B)w.cmegroup.com/)
-![Research](https://img.shields.io/badge/Researche-6f42c1
-![Asset Class](https://img.shields.io/badge20%26%20Options-a44f00
-![Status](https://img.shields.io/badge/StatusDevelopment-orange
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Market](https://img.shields.io/badge/Market-CME-00529B)](https://www.cmegroup.com/)
+[![Research](https://img.shields.io/badge/Research-Quantitative-6f42c1)](#)
+[![Asset Class](https://img.shields.io/badge/Asset-Futures%20%26%20Options-a44f00)](#)
+[![Status](https://img.shields.io/badge/Status-Active%20Development-orange)](#)
 
 **CME-focused quantitative research platform for livestock futures and options.**
 
